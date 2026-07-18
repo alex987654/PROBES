@@ -282,7 +282,6 @@ exactly, and the digest is computed over the canonical W-form.
 | `PROBES_CNL_Survey_Corpus.md` | 55-message corpus from historical agency missions; measured template coverage and findings |
 | `PROBES_CNL_Physical_Layer.md` | Channels, cache/archive siting tiers, hop-limit derivation, dispersal doctrine, energy loop, navigation and time |
 | `PROBES_CNL_Transport_Layer.md` | Framing, forward error correction, and erasure-coding profiles (TR-1 … TR-5) below the canonical form |
-| `PROBES_CNL_Amendment_Record.md` | Development and design-decision record (kept separate from the specification documents) |
 
 ---
 
