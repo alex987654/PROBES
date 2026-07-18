@@ -3,7 +3,11 @@
 A controlled natural language for inter-probe messaging across an autonomous exploration fleet. Derived from BEYOND CNL v0.4
 (Lexicon v0.4.2, Evidential System and Envelope Grammar v0.4.1).*
 
-Overview and Design Rationale
+See BEYOND CNL:
+
+[BEYOND Intro](https://github.com/alex987654/BEYOND)
+
+Overview and Design Rationale for PROBES CNL
 
 Version 1.0.0
 
@@ -41,7 +45,7 @@ requirements and keeps others:
 | Location of origin (home system, makers) | Inexpressible | **Inexpressible** — reinforced (§4) |
 | Intent | Inexpressible | **One constant**: the fleet-wide plan `PLAN-0` (§3) |
 | Tasking other agents | Inexpressible | Inexpressible — coordination is emergent (§3.2) |
-| Evidential coverage | 1.0 mandatory | 1.0 mandatory |
+| Evidential coverage | 0.4 mandatory | 1.0 mandatory |
 | Efficiency | Secondary | Primary co-goal — wire codes, templates, canonical units |
 
 ### 2.1 Threats addressed
@@ -267,7 +271,7 @@ exactly, and the digest is computed over the canonical W-form.
 
 | File | Contents |
 |---|---|
-| `PROBES_CNL_Overview.md` | This document — scenario, threat model, design rationale |
+| `README.md` | This document — scenario, threat model, design rationale |
 | `PROBES_CNL_Lexicon.md` | Lexicon rules, inheritance from BEYOND v0.4.2, removals, additions, banned classes, code assignment |
 | `PROBES_CNL_Evidential_System_and_Grammar.md` | Eleven E-tags, message envelope schema, formal grammar, register and linter rules |
 | `PROBES_CNL_Wire_Format.md` | PROBES-W encoding: records, codebook derivation, templates, canonicalization, digests |
