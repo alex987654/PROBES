@@ -297,4 +297,19 @@ exactly, and the digest is computed over the canonical W-form.
 
 ---
 
+## 9. Companion Tool
+
+`plan0_pace.py` — a stand-alone, dependency-free Python calculator (not part
+of the language specification) that estimates at what pace the 10,000-probe
+fleet could survey this galaxy under `PLAN-0`, for configurable archive
+layouts and the communication regime of the Physical Layer document:
+
+```
+python plan0_pace.py --help
+```
+
+Its test suite is `test_plan0_pace.py` (`python -m unittest`).
+
+---
+
 *End of PROBES CNL Overview v1.0.0.*
