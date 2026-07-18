@@ -1,7 +1,7 @@
 # PROBES CNL
 
 A controlled natural language for inter-probe messaging across an autonomous exploration fleet. Derived from BEYOND CNL v0.4
-(Lexicon v0.4.2, Evidential System and Envelope Grammar v0.4.1).*
+(Lexicon v0.4.2, Evidential System and Envelope Grammar v0.4.1).
 
 See BEYOND CNL:
 
