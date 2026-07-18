@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nothing About Home — PROBES</title>
+  <meta name="description" content="Watch the PROBES video, Nothing About Home, in your browser.">
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f7f6f3;
+      --text: #1c1c1c;
+      --muted: #5a5a5a;
+      --accent: #2b5e8c;
+      --frame: #00000022;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #14161a;
+        --text: #e8e6e1;
+        --muted: #a3a09a;
+        --accent: #8fbbdd;
+        --frame: #ffffff22;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      line-height: 1.6;
+      display: flex;
+      min-height: 100vh;
+      flex-direction: column;
+    }
+    main {
+      width: min(60rem, 100% - 2rem);
+      margin: 0 auto;
+      padding: 3rem 0 2rem;
+      flex: 1;
+    }
+    h1 {
+      font-size: clamp(1.6rem, 4vw, 2.4rem);
+      line-height: 1.2;
+      margin: 0 0 0.5rem;
+    }
+    .lede {
+      color: var(--muted);
+      margin: 0 0 2rem;
+      max-width: 42rem;
+    }
+    video {
+      display: block;
+      width: 100%;
+      height: auto;
+      border-radius: 8px;
+      border: 1px solid var(--frame);
+      background: #000;
+    }
+    .below {
+      margin-top: 1rem;
+      font-size: 0.95rem;
+      color: var(--muted);
+    }
+    a { color: var(--accent); }
+    footer {
+      width: min(60rem, 100% - 2rem);
+      margin: 0 auto;
+      padding: 1rem 0 2rem;
+      font-size: 0.9rem;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Nothing About Home</h1>
+    <p class="lede">
+      A short video introducing PROBES CNL, a controlled 
+      natural language for inter-probe messaging across an autonomous 
+      exploration fleet surveying a galaxy.
+    </p>
+    <video controls preload="metadata" playsinline>
+      <source src="media/PROBES_CNL_Nothing_About_Home.mp4" type="video/mp4">
+      Your browser cannot play video on this page.
+      You can <a href="media/PROBES_CNL_Nothing_About_Home.mp4">download the video file</a> instead.
+    </video>
+    <p class="below">
+      If the player does not start, you can
+      <a href="media/PROBES_CNL_Nothing_About_Home.mp4" download>download the video file</a> directly.
+    </p>
+  </main>
+  <footer>
+    Part of the <a href="https://github.com/alex987654/PROBES">PROBES CNL GitHub repo</a>.
+  </footer>
+</body>
+</html>
