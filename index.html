@@ -37,7 +37,7 @@
     main {
       width: min(60rem, 100% - 2rem);
       margin: 0 auto;
-      padding: 3rem 0 2rem;
+      padding: 1.5rem 0 1rem;
       flex: 1;
     }
     h1 {
@@ -47,19 +47,24 @@
     }
     .lede {
       color: var(--muted);
-      margin: 0 0 2rem;
+      margin: 0 0 1.25rem;
       max-width: 42rem;
     }
     video {
       display: block;
-      width: 100%;
+      width: auto;
       height: auto;
+      max-width: 100%;
+      max-height: 58vh;
+      max-height: 58svh;
+      aspect-ratio: 16 / 9;
+      margin-inline: auto;
       border-radius: 8px;
       border: 1px solid var(--frame);
       background: #000;
     }
     .below {
-      margin-top: 1rem;
+      margin-top: 0.75rem;
       font-size: 0.95rem;
       color: var(--muted);
     }
@@ -67,7 +72,7 @@
     footer {
       width: min(60rem, 100% - 2rem);
       margin: 0 auto;
-      padding: 1rem 0 2rem;
+      padding: 0.5rem 0 1.25rem;
       font-size: 0.9rem;
       color: var(--muted);
     }
