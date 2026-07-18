@@ -1,11 +1,14 @@
 # PROBES CNL
 
-A controlled natural language for inter-probe messaging across an autonomous exploration fleet. Derived from BEYOND CNL v0.4
+A controlled natural language for inter-probe messaging across an autonomous exploration fleet.
+Watch the intro video:
+
+## [Intro video](https://alex987654.github.io/PROBES/)
+
+PROBES CNL derived from BEYOND CNL v0.4
 (Lexicon v0.4.2, Evidential System and Envelope Grammar v0.4.1).
-
-See BEYOND CNL:
-
-[BEYOND Intro](https://github.com/alex987654/BEYOND)
+See BEYOND CNL for reference:
+[BEYOND CNL](https://github.com/alex987654/BEYOND)
 
 Overview and Design Rationale for PROBES CNL
 
