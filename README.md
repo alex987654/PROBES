@@ -78,12 +78,12 @@ locate the home system. Countermeasure: trajectory-anonymity
 rules, the Pulsar Time Standard, and removal of every
 origin-derived unit from the lexicon (§4.3).
 
-### 2.2 Honest scope limits
+### 2.2 Scope
 
-- The language family (English-derived) reveals something about
+- The language family (English-derived) reveals information about
   the makers. This is accepted by design: human interpretability
   of expanded messages outranks linguistic forensics resistance.
-- Covert channels are reduced, not eliminated. Canonical
+- Covert channels are reduced, not fully eliminated. Canonical
   ordering, clause templates, and sender-invariance shrink the
   free variation available for steganography; residual freedom
   (which observations a probe chooses to report) remains.
@@ -93,7 +93,7 @@ origin-derived unit from the lexicon (§4.3).
 
 ---
 
-## 3. The Single Plan Doctrine
+## 3. The One Plan To Rule All Probes Doctrine
 
 BEYOND bans intent because differential intent leaks who you
 are. A probe fleet cannot ban intent outright: the mere choice
