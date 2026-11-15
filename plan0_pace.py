@@ -46,8 +46,8 @@ DEFAULT_SYSTEMS = 1.0e11
 GALAXY_MODELS = ("exponential", "uniform")
 
 # Ways to run the survey. "regions" is the specification as it stands; the
-# others change how the fleet moves or what it records, and are here to be
-# compared with it.
+# others change how the fleet moves or what it records. The plan, and the
+# default, is "systems-midplane".
 STRATEGIES = {
     "regions": ("as the specification stands: the fleet spreads over the "
                 "disc and each probe surveys one region after another; "
@@ -299,7 +299,7 @@ class Scenario:
     bitrate_bps: float = 0.5             # optical link; section 2.2 (0.1-1)
     message_bytes: float = 500.0         # wire-form message; Wire Format s.9
     archives: str = "full-network"
-    strategy: str = "regions"            # see STRATEGIES
+    strategy: str = "systems-midplane"   # see STRATEGIES
     cache_spacing_kpc: Optional[float] = None   # overrides preset
     detour_kpc: Optional[float] = None          # overrides preset
     station_count: Optional[int] = None         # derives spacing + detour
@@ -515,8 +515,9 @@ INPUT_TABLE = [
     ("archives", None, None, None, False,
      "the doctrine layout (Physical Layer section 3)"),
     ("strategy", None, None, None, False,
-     "the specification: probes spread over the disc, completion "
-     "recorded by region (README section 3.2)"),
+     "the plan: completion recorded by system, probes waiting at the "
+     "mid-plane of the disc. The specification as it stands records "
+     "completion by region (README section 3.2): --strategy regions"),
     ("cache_spacing_kpc", None, None, None, False,
      "set by the archive layout"),
     ("detour_kpc", None, None, None, False,
@@ -2546,14 +2547,17 @@ def describe_galaxy(r: dict) -> list:
                    "fewer" if ratio >= 1 else "more"))
     lines = _wrap("Galaxy:", text)
     pct = r["hop_percentiles_parsec"]
+    # Where the hops grow during the survey these are the first ones.
+    hop = "first hops" if r["hop_thinning"] > 1.0 else "hop"
     if gal["model"] == "exponential":
-        lines += _wrap("", "-> hop between systems %.3g parsecs on average; "
+        lines += _wrap("", "-> %s between systems %.3g parsecs on average; "
                            "half are below %.3g, nine in ten between %.3g "
                            "and %.3g"
-                       % (r["hop_parsec"], pct["50"], pct["5"], pct["95"]))
+                       % (hop, r["hop_parsec"], pct["50"], pct["5"],
+                          pct["95"]))
     else:
-        lines += _wrap("", "-> hop between systems %.3g parsecs"
-                       % r["hop_parsec"])
+        lines += _wrap("", "-> %s between systems %.3g parsecs"
+                       % (hop, r["hop_parsec"]))
     return lines
 
 
@@ -3104,6 +3108,10 @@ also computed, and shown to be negligible.
 The report also says how sure the answer is, what every stop costs in
 propellant, how many probes the survey can afford to lose, and which
 effects the estimate leaves out, each with its size.
+
+By default the fleet records which systems are done one by one and
+waits for them at the mid-plane of the disc. The documents record
+completion by region; --strategy regions gives the estimate for that.
 """
 
 _EPILOG = """\
@@ -3115,9 +3123,11 @@ ways to run the survey (--strategy NAME):
 
 what the output shows:
   A headline duration, a phase-by-phase breakdown, milestone times for
-  half, ninety percent, ninety-nine percent, and all of the regions, the
-  share of the star systems that this reaches while they drift from
-  region to region, the distance traveled per probe and fleet-wide,
+  half, ninety percent, ninety-nine percent, and all of the star systems
+  (of the regions where completion is recorded by region, with the share
+  of the systems that this reaches while they drift from region to
+  region), every way of running the survey side by side, the distance
+  traveled per probe and fleet-wide,
   message counts with their transmission time, and the assumptions the
   numbers rest on. Durations appear in years and also in seconds;
   distances in light-years and also in meters (one light-year is about
@@ -3151,8 +3161,9 @@ examples:
       default with its source and plausible range
   python plan0_pace.py --uncertainty
       add the interval that the plausible input ranges give
-  python plan0_pace.py --strategy systems-midplane
-      another way of running the survey; every report compares them all
+  python plan0_pace.py --strategy regions
+      the specification as it stands; every report compares all the ways
+      of running the survey
   python plan0_pace.py --scenario my.json --json out.json
       load assumptions from a file, write full results to a file
 """
@@ -3278,8 +3289,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     g.add_argument("--strategy", choices=list(STRATEGIES), metavar="NAME",
                    help="way of running the survey; see the list below "
-                        "(default regions, the specification as it "
-                        "stands)")
+                        "(default systems-midplane; regions is the "
+                        "specification as it stands)")
 
     g = p.add_argument_group("archives and communication")
     g.add_argument("--archives", choices=sorted(ARCHIVE_PRESETS),
