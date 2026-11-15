@@ -271,8 +271,14 @@ def derive(sc: Scenario) -> dict:
     visited_per_probe = sc.systems * sc.depth / sc.probes
     work_s = visited_per_probe * t_sys_s
 
-    regions_per_probe = max(1.0, visited_per_probe / sc.region_systems)
-    t_region_s = sc.region_systems * t_sys_s
+    # A region cannot be larger than one probe's whole share of the
+    # survey. With more probes than regions the share is the smaller of
+    # the two, and the region cycle must shrink with it; otherwise the
+    # staleness below would be measured against a cycle longer than the
+    # entire survey.
+    region_systems = min(sc.region_systems, visited_per_probe)
+    regions_per_probe = visited_per_probe / region_systems
+    t_region_s = region_systems * t_sys_s
 
     # Archive effects -------------------------------------------------------
     dep_every = layout["deposit_every"]
@@ -303,11 +309,11 @@ def derive(sc: Scenario) -> dict:
     # staleness that represents, spread over the probe's own region budget.
     # A documented approximation (tunable via dup_gain), capped at dup_cap.
     if math.isinf(tau_s):
-        f_dup = sc.dup_cap
+        f_dup_raw = math.inf
     else:
-        f_dup = min(sc.dup_cap,
-                    sc.dup_gain * (tau_s / t_region_s)
-                    * sc.neighbors / regions_per_probe)
+        f_dup_raw = (sc.dup_gain * (tau_s / t_region_s)
+                     * sc.neighbors / regions_per_probe)
+    f_dup = min(sc.dup_cap, f_dup_raw)
 
     # Phases ----------------------------------------------------------------
     dispersal_s = sc.dispersal_leg_kpc * KPC_M / v * sc.envelope_factor
@@ -351,11 +357,16 @@ def derive(sc: Scenario) -> dict:
         hop_years=t_hop_s / YEAR_S,
         per_system_years=t_sys_s / YEAR_S,
         visited_per_probe=visited_per_probe,
+        region_systems=region_systems,
+        region_shrunk=region_systems < sc.region_systems,
         regions_per_probe=regions_per_probe,
         region_cycle_years=t_region_s / YEAR_S,
         staleness_years=None if math.isinf(tau_s) else tau_s / YEAR_S,
         staleness_infinite=math.isinf(tau_s),
         duplication_fraction=f_dup,
+        # True when the formula asked for more than the ceiling although
+        # archives exist: the fleet is too large for the approximation.
+        duplication_capped=(not math.isinf(tau_s) and f_dup_raw > sc.dup_cap),
         phases=dict(
             dispersal_years=dispersal_s / YEAR_S,
             survey_work_years=work_s / YEAR_S,
@@ -539,6 +550,16 @@ def render_report(r: dict, canonical: bool = False) -> str:
             % fmt_years(r["staleness_years"], canonical))
     add("  duplicated-work fraction: %.3g (cap %.2g)"
         % (r["duplication_fraction"], sc["dup_cap"]))
+    if r["duplication_capped"]:
+        add("  the estimate sits at its ceiling: with this few regions per")
+        add("  probe (%.3g) the formula is outside its range, so the true"
+            % r["regions_per_probe"])
+        add("  duplicated share is not known from this model")
+    if r["region_shrunk"]:
+        add("  each probe's share (%s systems) is smaller than one region"
+            % human_count(r["visited_per_probe"]))
+        add("  (%s systems), so the share itself is treated as the region"
+            % human_count(sc["region_systems"]))
     add("")
     add("Doctrine constants echoed (Physical Layer section 1)")
     add("-" * 60)
@@ -584,7 +605,7 @@ def render_explain(r: dict) -> str:
         % ph["survey_work_years"],
         "",
         "region cycle = %.3g systems x %.4g years = %.4g years"
-        % (sc["region_systems"], r["per_system_years"],
+        % (r["region_systems"], r["per_system_years"],
            r["region_cycle_years"]),
         "regions per probe = %.4g" % r["regions_per_probe"],
         "",

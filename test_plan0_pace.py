@@ -74,6 +74,36 @@ class TestModel(unittest.TestCase):
             r = pp.derive(pp.Scenario(archives=name))
             self.assertGreater(r["total_years"], 0, name)
 
+    def test_region_never_exceeds_one_probes_share(self):
+        # Audit A7: with a billion probes each share is 200 systems, but
+        # the region cycle stayed at 1000 systems, five times the whole
+        # survey of that probe.
+        sc = pp.Scenario(probes=1_000_000_000)
+        r = pp.derive(sc)
+        self.assertTrue(r["region_shrunk"])
+        self.assertAlmostEqual(r["region_systems"], r["visited_per_probe"])
+        self.assertAlmostEqual(r["regions_per_probe"], 1.0)
+        self.assertAlmostEqual(r["region_cycle_years"],
+                               r["phases"]["survey_work_years"])
+        # The ceiling is still reached, and the result says so: the
+        # formula grows with fleet size and passes the ceiling long
+        # before a share drops below one region.
+        self.assertTrue(r["duplication_capped"])
+        self.assertTrue(
+            pp.derive(pp.Scenario(probes=50_000_000))["duplication_capped"])
+        self.assertFalse(
+            pp.derive(pp.Scenario(probes=50_000_000))["region_shrunk"])
+        self.assertFalse(
+            pp.derive(pp.Scenario(archives="none"))["duplication_capped"])
+        # An ordinary fleet is untouched.
+        r = pp.derive(pp.Scenario())
+        self.assertFalse(r["region_shrunk"])
+        self.assertFalse(r["duplication_capped"])
+        self.assertEqual(r["region_systems"], pp.Scenario().region_systems)
+        self.assertAlmostEqual(
+            r["regions_per_probe"] * r["region_systems"],
+            r["visited_per_probe"])
+
     def test_milestones_monotonic(self):
         r = pp.derive(pp.Scenario())
         years = [m["years"] for m in r["milestones"]]
