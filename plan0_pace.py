@@ -36,28 +36,31 @@ MILESTONE_FRACTIONS = (0.5, 0.9, 0.99, 1.0)
 # Archive layout presets
 #
 # Each layout resolves to four model quantities:
-#   cache_spacing_kpc  distance between archive points a probe can reach
+#   cache_spacing_kpc  distance between archive points a probe can reach;
+#                      None means "the mean probe spacing of this fleet",
+#                      which is what the doctrine asks for (Physical Layer
+#                      section 3.2, criterion 6)
 #   detour_kpc         mean one-way off-route distance to the nearest point
 #   consolidated       whether staffed stations merge records fleet-wide
 #                      on the consolidation cycle (Physical Layer section 3.1)
 #   deposit_every      probe deposits records after every Nth region
 #
-# Preset names use plain words so the --help output stays free of
-# specification shorthand; the spec_note maps each back to the archive
-# tiers of Physical Layer sections 3.1-3.2 for the report output.
+# Preset names and notes use plain words so the --help and report output
+# stay free of specification shorthand; the spec_note maps each layout
+# back to the archive tiers of Physical Layer sections 3.1-3.2.
 # ---------------------------------------------------------------------------
 
 ARCHIVE_PRESETS = {
     "full-network": dict(
-        cache_spacing_kpc=0.27, detour_kpc=0.01, consolidated=True,
+        cache_spacing_kpc=None, detour_kpc=0.01, consolidated=True,
         deposit_every=1,
         help=("staffed archive stations in the calm zones between spiral "
               "arms, plus unattended deposit boxes along every survey "
               "route; records merge into shared archives on the regular "
               "consolidation cycle"),
-        spec_note=("tiers L1 + L2, Physical Layer sections 3.1-3.2; node "
-                   "spacing tracks the mean probe spacing s of ~0.27 "
-                   "kiloparsecs"),
+        spec_note=("custodial archive nodes plus passive caches, the first "
+                   "and second tiers of Physical Layer sections 3.1-3.2; "
+                   "node spacing follows the mean probe spacing"),
     ),
     "route-boxes-only": dict(
         cache_spacing_kpc=0.10, detour_kpc=0.005, consolidated=False,
@@ -65,22 +68,26 @@ ARCHIVE_PRESETS = {
         help=("unattended deposit boxes placed densely along survey routes "
               "with no staffed stations, so a record is readable only at "
               "the box where it was left and knowledge spreads slowly"),
-        spec_note="tier L2 only, Physical Layer section 3.1",
+        spec_note=("passive caches only, the second tier of Physical Layer "
+                   "section 3.1"),
     ),
     "stations-only": dict(
-        cache_spacing_kpc=0.27, detour_kpc=0.5, consolidated=True,
+        cache_spacing_kpc=None, detour_kpc=0.5, consolidated=True,
         deposit_every=10,
         help=("staffed archive stations confined to the calm zones between "
               "spiral arms; probes must detour to reach them, so they "
               "deposit records less often"),
-        spec_note="tier L1 only, sited per Physical Layer section 3.2",
+        spec_note=("custodial archive nodes only, the first tier, sited per "
+                   "Physical Layer section 3.2; node spacing follows the "
+                   "mean probe spacing"),
     ),
     "sparse": dict(
         cache_spacing_kpc=5.0, detour_kpc=2.5, consolidated=True,
         deposit_every=50,
         help=("a handful of staffed archive stations across the whole "
               "galaxy; long detours and long information delays"),
-        spec_note="degenerate tier L1 layout, far below doctrine density",
+        spec_note=("a thinned-out first tier, far below the density the "
+                   "doctrine asks for"),
     ),
     "none": dict(
         cache_spacing_kpc=None, detour_kpc=0.0, consolidated=False,
@@ -88,9 +95,13 @@ ARCHIVE_PRESETS = {
         help=("no shared archives at all; probes never learn what others "
               "have finished, so duplicated work sits at the model's cap "
               "- included to show why the archive network exists"),
-        spec_note="no CCH- nodes; violates fleet doctrine, shown for contrast",
+        spec_note=("no cache nodes at all; against fleet doctrine, shown "
+                   "for contrast"),
     ),
 }
+
+# Relay hop limit fixed by the specification (Physical Layer section 4.3).
+SPEC_HOP_LIMIT = 2
 
 # ---------------------------------------------------------------------------
 # Scenario
@@ -216,13 +227,47 @@ class Scenario:
                                 ", ".join(sorted(ARCHIVE_PRESETS))))
 
 
+def fleet_geometry(sc: Scenario) -> dict:
+    """Spacing and timing of the fleet, computed from the scenario
+    (the quantities of the regime table, Physical Layer section 1)."""
+    area_kpc2 = math.pi * sc.disc_radius_kpc ** 2 / sc.probes
+    spacing_kpc = math.sqrt(area_kpc2)          # one probe per square cell
+    # Same area per probe on a lattice where each probe has six neighbors.
+    lattice_kpc = math.sqrt(2.0 * area_kpc2 / math.sqrt(3.0))
+    light_years = spacing_kpc * KPC_M / C_M_PER_S / YEAR_S
+    transit_years = light_years / sc.speed_c
+    # Relay reach (Physical Layer section 4.2): a relayed fact is worth
+    # having only where a probe could act on it before the archives
+    # deliver it, one to two consolidation cycles later. In that time a
+    # probe covers this many probe spacings.
+    reach_low = sc.consolidation_years / transit_years
+    reach_high = 2.0 * reach_low
+    return dict(
+        area_per_probe_kpc2=area_kpc2,
+        spacing_kpc=spacing_kpc,
+        lattice_spacing_kpc=lattice_kpc,
+        light_years_per_spacing=light_years,
+        transit_years_per_spacing=transit_years,
+        crossing_light_years=(2.0 * sc.disc_radius_kpc * KPC_M
+                              / C_M_PER_S / YEAR_S),
+        cadence_in_transits=reach_low,
+        relay_reach_spacings=[reach_low, reach_high],
+        useful_relay_hops=[max(1, math.ceil(reach_low)),
+                           max(1, math.ceil(reach_high))],
+        spec_hop_limit=SPEC_HOP_LIMIT,
+    )
+
+
 def resolve_layout(sc: Scenario) -> dict:
     """Merge the archive preset with any user overrides into the four
     quantities the model consumes."""
     preset = ARCHIVE_PRESETS[sc.archives]
+    spacing_kpc = preset["cache_spacing_kpc"]
+    if spacing_kpc is None and preset["deposit_every"] is not None:
+        spacing_kpc = fleet_geometry(sc)["spacing_kpc"]
     layout = dict(
         name=sc.archives,
-        cache_spacing_kpc=preset["cache_spacing_kpc"],
+        cache_spacing_kpc=spacing_kpc,
         detour_kpc=preset["detour_kpc"],
         consolidated=preset["consolidated"],
         deposit_every=preset["deposit_every"],
@@ -391,6 +436,7 @@ def derive(sc: Scenario) -> dict:
     return dict(
         scenario=asdict(sc),
         layout=layout,
+        geometry=fleet_geometry(sc),
         speed_m_per_s=v,
         hop_parsec=hop_m / PARSEC_M,
         hop_years=t_hop_s / YEAR_S,
@@ -515,6 +561,12 @@ def fmt_years(years: float, canonical: bool = False) -> str:
     return "%s years (%s)" % (human_count(years), si_quantity(seconds, "second"))
 
 
+def fmt_kiloparsecs(kpc: float, canonical: bool = False) -> str:
+    if canonical:
+        return si_quantity(kpc * KPC_M, "meter")
+    return "%.3g kiloparsecs" % kpc
+
+
 def fmt_meters(meters: float, canonical: bool = False) -> str:
     if canonical:
         return si_quantity(meters, "meter")
@@ -564,7 +616,7 @@ def render_report(r: dict, canonical: bool = False) -> str:
     add("Phase breakdown")
     add("-" * 60)
     total = r["total_years"]
-    for label, key in [("dispersal (PROC-DSP, Physical Layer 4.5)",
+    for label, key in [("scattering phase (Physical Layer 4.5)",
                         "dispersal_years"),
                        ("survey travel + dwell", "survey_work_years"),
                        ("duplicated work (stale knowledge)",
@@ -628,13 +680,34 @@ def render_report(r: dict, canonical: bool = False) -> str:
         for item in r["unused_inputs"]:
             add("  %s: %s" % (flag_for(item["input"]), item["reason"]))
     add("")
-    add("Doctrine constants echoed (Physical Layer section 1)")
+    g = r["geometry"]
+    add("Fleet geometry for this scenario (Physical Layer section 1)")
     add("-" * 60)
-    add("  probe spacing s ~ 0.27 kiloparsecs; light time per spacing ~880")
-    add("  years; probe transit per spacing ~1.8e4 years; consolidation")
-    add("  cadence T_c ~ %.3g years; relay hop limit h = 2; cold vaults"
-        % sc["consolidation_years"])
-    add("  (tier L3) affect synthesis latency only, never survey pace.")
+    add("  mean probe spacing:        %s (%s on a lattice"
+        % (fmt_kiloparsecs(g["spacing_kpc"], canonical),
+           fmt_kiloparsecs(g["lattice_spacing_kpc"], canonical)))
+    add("                             with six neighbors)")
+    add("  light time per spacing:    %s"
+        % fmt_years(g["light_years_per_spacing"], canonical))
+    add("  probe transit per spacing: %s"
+        % fmt_years(g["transit_years_per_spacing"], canonical))
+    add("  consolidation cadence:     %s, %.2f of a probe transit"
+        % (fmt_years(sc["consolidation_years"], canonical),
+           g["cadence_in_transits"]))
+    low, high = g["relay_reach_spacings"]
+    hops_low, hops_high = g["useful_relay_hops"]
+    add("  relay reach: a relayed fact stays ahead of the archives for one")
+    add("  to two consolidation cycles; in that time a probe covers %.2f to"
+        % low)
+    add("  %.2f probe spacings, so %s useful. The specification"
+        % (high, ("%d relay hop is" % hops_low if hops_low == hops_high == 1
+                  else "%d relay hops are" % hops_low
+                  if hops_low == hops_high
+                  else "%d to %d relay hops are" % (hops_low, hops_high))))
+    add("  fixes the limit at %d (Physical Layer section 4.3)."
+        % g["spec_hop_limit"])
+    add("  Cold vaults (the third archive tier) change how soon results can")
+    add("  be assembled, never the survey pace.")
     add("")
     add("Caveats")
     add("-" * 60)

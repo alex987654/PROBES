@@ -12,6 +12,22 @@ import unittest
 import plan0_pace as pp
 
 
+# The manual and the report must stay free of bare acronyms and
+# specification shorthand. Word-boundary tokens plus raw substrings.
+DENYLIST_WORDS = ["CNL", "FEC", "PPM", "GSF", "PTS", "CCSDS", "YAML",
+                  "kpc", "pc", "ly", "Myr", "Gyr", "L1", "L2", "L3",
+                  "AU", "SI"]
+DENYLIST_SUBSTRINGS = ["T_c", "h_max", "PROC-", "CAT-", "CCH-", "e.g."]
+
+
+def banned_tokens(text):
+    """Every deny-listed token found in a piece of user-facing text."""
+    found = [word for word in DENYLIST_WORDS
+             if re.search(r"\b%s\b" % re.escape(word), text)]
+    found += [sub for sub in DENYLIST_SUBSTRINGS if sub in text]
+    return found
+
+
 class TestConstants(unittest.TestCase):
     def test_kiloparsec_is_thousand_parsecs(self):
         self.assertAlmostEqual(pp.KPC_M / pp.PARSEC_M, 1000.0)
@@ -135,6 +151,107 @@ class TestModel(unittest.TestCase):
                     dict(probes=0), dict(archives="orbital-mind-lasers")]:
             with self.assertRaises(ValueError):
                 pp.derive(pp.Scenario(**bad))
+
+
+class TestFleetGeometry(unittest.TestCase):
+    """Audit A6: the regime figures are computed, not fixed text."""
+
+    def test_default_fleet_matches_the_regime_table(self):
+        # Physical Layer section 1: about 0.07 square kiloparsecs per
+        # probe, 0.27 kiloparsecs spacing, 880 years of light time,
+        # 1.8e4 years of probe transit, 1e5 years to cross the fleet.
+        g = pp.derive(pp.Scenario())["geometry"]
+        self.assertAlmostEqual(g["area_per_probe_kpc2"], 0.07, delta=0.001)
+        self.assertAlmostEqual(g["spacing_kpc"], 0.27, delta=0.005)
+        self.assertAlmostEqual(g["light_years_per_spacing"] / 880, 1.0,
+                               delta=0.02)
+        self.assertAlmostEqual(g["transit_years_per_spacing"] / 1.8e4, 1.0,
+                               delta=0.04)
+        self.assertAlmostEqual(g["crossing_light_years"] / 1e5, 1.0,
+                               delta=0.03)
+
+    def test_identities(self):
+        sc = pp.Scenario(probes=2500, disc_radius_kpc=12.0, speed_c=0.08)
+        g = pp.derive(sc)["geometry"]
+        self.assertAlmostEqual(g["area_per_probe_kpc2"] * sc.probes,
+                               math.pi * 12.0 ** 2)
+        self.assertAlmostEqual(g["spacing_kpc"] ** 2,
+                               g["area_per_probe_kpc2"])
+        # Six-neighbor lattice: each probe owns a hexagon of the same area.
+        self.assertAlmostEqual(
+            math.sqrt(3.0) / 2.0 * g["lattice_spacing_kpc"] ** 2,
+            g["area_per_probe_kpc2"])
+        self.assertAlmostEqual(
+            g["light_years_per_spacing"],
+            g["spacing_kpc"] * pp.KPC_M / pp.LIGHT_YEAR_M, places=6)
+        self.assertAlmostEqual(
+            g["transit_years_per_spacing"] * sc.speed_c,
+            g["light_years_per_spacing"])
+
+    def test_follows_probes_radius_and_speed(self):
+        base = pp.derive(pp.Scenario())["geometry"]
+        more = pp.derive(pp.Scenario(probes=40_000))["geometry"]
+        wide = pp.derive(pp.Scenario(disc_radius_kpc=30.0))["geometry"]
+        fast = pp.derive(pp.Scenario(speed_c=0.1))["geometry"]
+        self.assertAlmostEqual(more["spacing_kpc"], base["spacing_kpc"] / 2)
+        self.assertAlmostEqual(wide["spacing_kpc"], base["spacing_kpc"] * 2)
+        self.assertAlmostEqual(fast["transit_years_per_spacing"],
+                               base["transit_years_per_spacing"] / 2)
+        self.assertAlmostEqual(fast["light_years_per_spacing"],
+                               base["light_years_per_spacing"])
+        text = pp.render_report(pp.derive(pp.Scenario(probes=100,
+                                                      speed_c=0.2)))
+        self.assertIn("2.66 kiloparsecs", text)
+        self.assertNotIn("0.27 kiloparsecs", text)
+
+    def test_relay_reach_follows_cadence_and_speed(self):
+        # Physical Layer 4.2: reach over spacing = cycles x cadence / transit.
+        g = pp.derive(pp.Scenario())["geometry"]
+        low, high = g["relay_reach_spacings"]
+        self.assertAlmostEqual(
+            low, 10_000.0 / g["transit_years_per_spacing"])
+        self.assertAlmostEqual(high, 2 * low)
+        self.assertEqual(g["useful_relay_hops"], [1, 2])
+        self.assertEqual(g["spec_hop_limit"], 2)
+        fast = pp.derive(pp.Scenario(speed_c=0.1))["geometry"]
+        self.assertEqual(fast["useful_relay_hops"], [2, 3])
+        slow_cycle = pp.derive(
+            pp.Scenario(consolidation_years=40_000.0))["geometry"]
+        self.assertEqual(slow_cycle["useful_relay_hops"], [3, 5])
+
+    def test_station_layouts_follow_the_probe_spacing(self):
+        for probes in (10_000, 100):
+            for name in ("full-network", "stations-only"):
+                r = pp.derive(pp.Scenario(archives=name, probes=probes))
+                self.assertAlmostEqual(r["layout"]["cache_spacing_kpc"],
+                                       r["geometry"]["spacing_kpc"])
+        self.assertIsNone(
+            pp.derive(pp.Scenario(archives="none"))["layout"]
+            ["cache_spacing_kpc"])
+        self.assertEqual(
+            pp.derive(pp.Scenario(archives="sparse"))["layout"]
+            ["cache_spacing_kpc"], 5.0)
+
+
+class TestReportWording(unittest.TestCase):
+    """The report and the formula listing follow the plain-word rule of
+    the help text."""
+
+    def texts(self):
+        for name in pp.ARCHIVE_PRESETS:
+            r = pp.derive(pp.Scenario(archives=name))
+            yield "report %s" % name, pp.render_report(r)
+            yield "canonical %s" % name, pp.render_report(r, canonical=True)
+            yield "explain %s" % name, pp.render_explain(r)
+        odd = pp.derive(pp.Scenario(archives="none", cache_spacing_kpc=3.0,
+                                    probes=1_000_000_000,
+                                    attrition_per_year=1e-8))
+        yield "odd report", pp.render_report(odd)
+        yield "odd explain", pp.render_explain(odd)
+
+    def test_no_acronyms_or_jargon(self):
+        for label, text in self.texts():
+            self.assertEqual(banned_tokens(text), [], label)
 
 
 class TestStaleness(unittest.TestCase):
@@ -276,25 +393,15 @@ class TestInputValidation(unittest.TestCase):
 
 
 class TestHelpText(unittest.TestCase):
-    # The manual must stay free of bare acronyms and specification
-    # shorthand (matching the readability rule of Amendment Record
-    # section 8). Word-boundary tokens plus raw substrings.
-    DENYLIST_WORDS = ["CNL", "FEC", "PPM", "GSF", "PTS", "CCSDS", "YAML",
-                      "kpc", "pc", "ly", "Myr", "Gyr", "L1", "L2", "L3",
-                      "AU", "SI"]
-    DENYLIST_SUBSTRINGS = ["T_c", "h_max", "PROC-", "CAT-", "CCH-", "e.g."]
-
     def setUp(self):
         self.help_text = pp.build_parser().format_help()
 
     def test_no_acronyms_or_jargon(self):
-        for word in self.DENYLIST_WORDS:
-            self.assertIsNone(
-                re.search(r"\b%s\b" % re.escape(word), self.help_text),
-                "help text contains banned token %r" % word)
-        for sub in self.DENYLIST_SUBSTRINGS:
-            self.assertNotIn(sub, self.help_text,
-                             "help text contains banned token %r" % sub)
+        self.assertEqual(banned_tokens(self.help_text), [])
+
+    def test_denylist_itself_still_bites(self):
+        self.assertEqual(banned_tokens("0.27 kpc, e.g. at T_c"),
+                         ["kpc", "T_c", "e.g."])
 
     def test_every_option_documented(self):
         for action in pp.build_parser()._actions:
