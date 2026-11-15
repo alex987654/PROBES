@@ -1590,6 +1590,29 @@ class TestStrategies(unittest.TestCase):
             pp.derive(pp.Scenario(strategy="systems"))))
         self.assertNotIn("0.65 / 0.78", pp.render_explain(base))
 
+    def test_hop_spread_and_engines_follow_the_first_hops(self):
+        by_region = pp.derive(pp.Scenario(strategy="regions"))
+        for name in pp.RECORDS_BY_SYSTEM:
+            r = pp.derive(pp.Scenario(strategy=name))
+            # the spread of hop lengths is that of the first hops
+            pct = r["hop_percentiles_parsec"]
+            self.assertLess(pct["5"], pct["50"])
+            self.assertLess(pct["50"], r["hop_parsec"])
+            self.assertLess(r["hop_parsec"], pct["95"])
+            # what an engine adds is measured on the same hops
+            given = {a: pp.derive(pp.Scenario(strategy=name,
+                                              acceleration_m_s2=a))
+                     for a in pp.REFERENCE_ACCELERATIONS}
+            for row in r["kinematics"]["reference"]:
+                run = given[row["acceleration_m_s2"]]
+                self.assertAlmostEqual(
+                    row["extra_hop_fraction"],
+                    run["kinematics"]["extra_hop_fraction"])
+        plain = pp.derive(pp.Scenario(strategy="systems"))
+        for key, value in plain["hop_percentiles_parsec"].items():
+            self.assertAlmostEqual(
+                value / by_region["hop_percentiles_parsec"][key], 0.65 / 0.78)
+
     def test_records_by_system_lengthen_hops_not_stays(self):
         base = pp.derive(pp.Scenario(strategy="regions"))
         r = pp.derive(pp.Scenario(strategy="systems"))
@@ -1839,6 +1862,114 @@ class TestStrategies(unittest.TestCase):
                                      acceleration_m_s2=0.003))
         self.assertGreater(weak["kinematics"]["hops_reaching_cruise"], 0.0)
         self.assertLess(weak["kinematics"]["hops_reaching_cruise"], 1.0)
+
+    # ---- where the stars do not mix ------------------------------------
+
+    def test_default_fleet_is_fully_mixed(self):
+        for name in pp.RECORDS_BY_SYSTEM:
+            r = pp.derive(pp.Scenario(strategy=name))
+            self.assertAlmostEqual(r["mixing"]["crossings"], 53, delta=1)
+            self.assertEqual(r["mixing"]["share"], 1.0)
+        for name in ("regions", "sweep-line"):
+            r = pp.derive(pp.Scenario(strategy=name))
+            self.assertIsNone(r["mixing"])
+            self.assertIsNone(r["plane_wait"])
+
+    def test_stars_that_stand_still_leave_nothing_to_gain(self):
+        # A fleet so large that the survey is over before the stars have
+        # moved: recording by system then changes nothing.
+        huge = dict(probes=10_000_000_000)
+        by_region = pp.derive(pp.Scenario(strategy="regions", **huge))
+        for name in pp.RECORDS_BY_SYSTEM:
+            r = pp.derive(pp.Scenario(strategy=name, **huge))
+            self.assertLess(r["mixing"]["share"], 0.01)
+            self.assertAlmostEqual(r["total_years"] / by_region["total_years"],
+                                   1.0, delta=0.001)
+            self.assertAlmostEqual(r["hop_parsec"] / by_region["hop_parsec"],
+                                   1.0, delta=0.01)
+            self.assertAlmostEqual(r["hop_thinning"], 1.0, delta=0.01)
+            text = " ".join(x.strip() for x in pp.render_report(r).splitlines())
+            self.assertIn("The stars barely move during a survey this short",
+                          text)
+            self.assertNotIn("thin out", text)
+
+    def test_partial_mixing_lies_between_the_two_laws(self):
+        still = pp.derive(pp.Scenario(strategy="regions"))
+        mixed = pp.derive(pp.Scenario(strategy="systems"))
+        previous = None
+        for probes in (10_000, 300_000, 3_000_000, 30_000_000, 10 ** 9):
+            r = pp.derive(pp.Scenario(strategy="systems", probes=probes))
+            share = r["mixing"]["share"]
+            self.assertAlmostEqual(share,
+                                   1 - math.exp(-r["mixing"]["crossings"]))
+            if previous is not None:
+                self.assertLess(share, previous)    # shorter survey, less
+            previous = share
+            self.assertAlmostEqual(
+                r["hop_parsec"],
+                (1 - share) * still["hop_parsec"]
+                + share * mixed["hop_parsec"])
+            self.assertAlmostEqual(
+                r["hop_parsec"] * r["hop_thinning"],
+                (1 - share) * still["hop_parsec"]
+                + share * 1.5 * mixed["hop_parsec"])
+        r = pp.derive(pp.Scenario(strategy="systems", probes=3_000_000))
+        self.assertGreater(r["mixing"]["share"], 0.05)
+        self.assertLess(r["mixing"]["share"], 0.995)
+        text = " ".join(x.strip() for x in pp.render_report(r).splitlines())
+        self.assertIn("The stars mix only in part during a survey this "
+                      "short", text)
+        # One probe's share of the galaxy: its systems at the mean spacing.
+        side = r["mixing"]["probe_share_side_parsec"]
+        self.assertAlmostEqual(
+            side, (1e11 / 3e6) ** (1 / 3) * r["galaxy"]["mean_spacing_pc"])
+
+    def test_waiting_at_the_mid_plane_needs_several_swings(self):
+        # Simulated (layer of 0.3 scale heights either side): distance to
+        # 99 percent, over that of a slab in which every system is equally
+        # exposed, for surveys of 7.8, 3.9, 1.9, 1.0 and 0.45 swings:
+        # 1.45, 1.47, 1.58, 1.86 and 2.65, the last two with idle probes.
+        r = pp.derive(pp.Scenario(strategy="systems-midplane"))
+        wait = r["plane_wait"]
+        self.assertTrue(wait["waits"])
+        self.assertAlmostEqual(wait["swing_years"], 7 * 350 * pp.PARSEC_M
+                               / 2.0e4 / pp.YEAR_S)
+        self.assertAlmostEqual(wait["swing_years"] / 1.2e8, 1.0, delta=0.01)
+        self.assertAlmostEqual(wait["swings"], 9.4, delta=0.1)
+        self.assertEqual(r["galaxy"]["parts"][0]["kind"], "disc-plane")
+        self.assertIsNone(
+            pp.derive(pp.Scenario(strategy="systems"))["plane_wait"])
+        # Ten times the fleet: the survey lasts one swing, and the probes
+        # go to the systems instead.
+        short = pp.derive(pp.Scenario(strategy="systems-midplane",
+                                      probes=100_000))
+        plain = pp.derive(pp.Scenario(strategy="systems", probes=100_000))
+        self.assertFalse(short["plane_wait"]["waits"])
+        self.assertLess(short["plane_wait"]["swings"],
+                        pp.PLANE_SWINGS_NEEDED)
+        self.assertEqual(short["milestones"], plain["milestones"])
+        self.assertEqual(short["hop_parsec"], plain["hop_parsec"])
+        self.assertEqual(short["galaxy"]["parts"][0]["kind"], "disc")
+        self.assertIsNone(short["plane_left_at_half"])
+        text = " ".join(x.strip()
+                        for x in pp.render_report(short).splitlines())
+        self.assertIn("Waiting at the mid-plane does not work for a survey "
+                      "this short", text)
+        # A uniform disc has no mid-plane to wait at.
+        self.assertIsNone(pp.derive(pp.Scenario(
+            strategy="systems-midplane",
+            galaxy_model="uniform"))["plane_wait"])
+
+    def test_wording_of_every_case(self):
+        for name in pp.RECORDS_BY_SYSTEM:
+            for probes in (10_000, 100_000, 3_000_000, 10 ** 9):
+                for extra in ({}, {"galaxy_model": "uniform"}):
+                    r = pp.derive(pp.Scenario(strategy=name, probes=probes,
+                                              **extra))
+                    for text in (pp.render_report(r), pp.render_explain(r),
+                                 pp.render_report(r, canonical=True)):
+                        self.assertEqual(banned_tokens(text), [])
+                    json.dumps(pp.json_safe(r), allow_nan=False)
 
     # ---- a line held while the disc turns past it ----------------------
 

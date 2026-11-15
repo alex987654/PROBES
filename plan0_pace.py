@@ -77,6 +77,22 @@ RECORDS_BY_SYSTEM = ("systems", "systems-midplane")
 OPEN_FIELD_HOP = 0.65
 CLEARED_FIELD_HOP = 0.78
 
+# Both hold only where the stars mix during the survey. The measure is how
+# often a star crosses one probe's share of the galaxy while the survey
+# lasts; the share of the mixed law in the result is 1 - exp(-crossings).
+# In the simulations 0.8, 1.7 and 3.4 crossings gave 0.75, 0.87 and 0.97
+# of the way from a field of fixed points to full mixing.
+#
+# Waiting at the mid-plane needs more: the stars have to swing through it
+# many times. A star of typical swing takes about 7 scale heights over its
+# random speed to go up, down and back. In the simulations the law for the
+# mid-plane held for surveys of 4 swings or more; with 2 swings the 99
+# percent mark came 9 percent later, with 1 swing 28 percent later, and
+# the probes began to stand idle. Below 4 swings the probes are taken to
+# go to the systems instead of waiting for them.
+PLANE_SWING_IN_HEIGHTS = 7.0
+PLANE_SWINGS_NEEDED = 4.0
+
 # Beyond this duration the galaxy itself rotates, shears and forms stars
 # on the timescale of the survey, none of which the model follows; any
 # longer result is a scale estimate and is labeled so at the headline.
@@ -714,10 +730,12 @@ def _bulge_cdf(q: float) -> float:
     return math.erf(root) - 2.0 * root * math.exp(-q) / math.sqrt(math.pi)
 
 
-def resolve_galaxy(sc: Scenario) -> dict:
+def resolve_galaxy(sc: Scenario, plane=None) -> dict:
     """Turn the workload inputs into the system count and the spacing
     between neighboring systems. Exactly one of the two is an input in
-    any run unless the user gives both on purpose."""
+    any run unless the user gives both on purpose. `plane` says whether
+    disc systems are taken at the mid-plane; by default the strategy
+    decides."""
     radius_pc = sc.disc_radius_kpc * 1e3
     thickness_pc = sc.disc_thickness_kpc * 1e3
     slab_volume_pc3 = math.pi * radius_pc ** 2 * thickness_pc
@@ -741,9 +759,10 @@ def resolve_galaxy(sc: Scenario) -> dict:
 
     if gal["model"] == "uniform":
         spacing = gal["uniform_density"] ** (-1.0 / 3.0)
-        gal.update(mean_spacing_pc=spacing, parts=[
-            dict(kind="uniform", share=1.0, central_spacing_pc=spacing,
-                 mean_spacing_pc=spacing)])
+        gal.update(mean_spacing_pc=spacing, mean_spacing_at_large_pc=spacing,
+                   parts=[dict(kind="uniform", share=1.0,
+                               central_spacing_pc=spacing,
+                               mean_spacing_pc=spacing)])
         return gal
 
     scale_pc = sc.scale_length_kpc * 1e3
@@ -757,7 +776,8 @@ def resolve_galaxy(sc: Scenario) -> dict:
     # Mean of exp(u / 3) over systems: 9/4 g(2x/3)/g(x) from the radius,
     # and 3/2 more from the height unless the probes wait at the
     # mid-plane.
-    plane = sc.strategy == "systems-midplane"
+    if plane is None:
+        plane = sc.strategy == "systems-midplane"
     parts = [dict(
         kind="disc-plane" if plane else "disc",
         share=1.0 - sc.bulge_fraction, xm=xm,
@@ -1462,6 +1482,16 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
     gal = resolve_galaxy(sc)
 
     v = sc.speed_c * C_M_PER_S
+    accel = sc.acceleration_m_s2
+    visited_per_probe = gal["systems"] * sc.depth / sc.probes
+
+    # Propellant (classical rocket equation; the relativistic correction
+    # is about one percent in the exponent at 0.2 of light speed). Each
+    # visited system costs one braking and one acceleration, a velocity
+    # change of 2 v. Hops too short to reach cruise speed cost less.
+    mass_ratio = math.exp(2.0 * sc.speed_c / sc.exhaust_speed_c)
+    refuel_s = sc.refuel_years_per_mass * (mass_ratio - 1.0) * YEAR_S
+    dwell_s = sc.dwell_years * YEAR_S + refuel_s
 
     # Inter-system hop: the path factor times the mean spacing between
     # neighboring systems. Sampling at depth < 1 thins the visited set, so
@@ -1476,13 +1506,50 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
     # distance traveled, in first hops per system, when a share of the
     # systems is surveyed. Only the distance grows: the time spent
     # speeding up and slowing down stays as it is.
+    #
+    # All of that needs the stars to mix while the survey lasts. Where
+    # they do not, the field stands still and the survey runs as it would
+    # by regions; in between the two laws are weighted (see the note at
+    # OPEN_FIELD_HOP). Waiting at the mid-plane needs the stars to swing
+    # through it several times as well.
     by_system = sc.strategy in RECORDS_BY_SYSTEM
     hop_scale = sc.path_factor * sc.depth ** (-1.0 / 3.0)
+    mixing = plane_wait = None
     if by_system:
-        hop_scale *= OPEN_FIELD_HOP / CLEARED_FIELD_HOP
-    hop_m = hop_scale * gal["mean_spacing_pc"] * PARSEC_M
-    accel = sc.acceleration_m_s2
-    first_hop_s, cruise_share = mean_hop_seconds(gal, hop_scale, v, accel)
+        at_large = (gal if gal["parts"][0]["kind"] != "disc-plane"
+                    else resolve_galaxy(sc, plane=False))
+        still_hop_m = hop_scale * at_large["mean_spacing_pc"] * PARSEC_M
+        still_first_s, still_cruise = mean_hop_seconds(at_large, hop_scale,
+                                                       v, accel)
+        still_years = visited_per_probe * (still_first_s + dwell_s) / YEAR_S
+        share_side_pc = ((gal["systems"] / sc.probes) ** (1.0 / 3.0)
+                         * at_large["mean_spacing_pc"])
+        crossings = (still_years * YEAR_S * RANDOM_SPEEDS_M_S[0]
+                     / (share_side_pc * PARSEC_M))
+        mixing = dict(crossings=crossings, share=-math.expm1(-crossings),
+                      probe_share_side_parsec=share_side_pc)
+        if at_large is not gal:
+            swing_years = (PLANE_SWING_IN_HEIGHTS * gal["scale_height_pc"]
+                           * PARSEC_M / RANDOM_SPEEDS_M_S[0] / YEAR_S)
+            plane_wait = dict(swing_years=swing_years,
+                              swings=still_years / swing_years,
+                              waits=(still_years >= PLANE_SWINGS_NEEDED
+                                     * swing_years))
+            if not plane_wait["waits"]:
+                gal = at_large
+        mixed = mixing["share"]
+        open_scale = hop_scale * OPEN_FIELD_HOP / CLEARED_FIELD_HOP
+        open_hop_m = open_scale * gal["mean_spacing_pc"] * PARSEC_M
+        open_first_s, open_cruise = mean_hop_seconds(gal, open_scale, v,
+                                                     accel)
+        hop_m = (1.0 - mixed) * still_hop_m + mixed * open_hop_m
+        first_hop_s = (1.0 - mixed) * still_first_s + mixed * open_first_s
+        cruise_share = (1.0 - mixed) * still_cruise + mixed * open_cruise
+        # first hop over mean spacing, for the spread of hop lengths
+        hop_scale = hop_m / (gal["mean_spacing_pc"] * PARSEC_M)
+    else:
+        hop_m = hop_scale * gal["mean_spacing_pc"] * PARSEC_M
+        first_hop_s, cruise_share = mean_hop_seconds(gal, hop_scale, v, accel)
 
     def _over_parts(which, share):
         return sum(part["share"] * part["mean_spacing_pc"]
@@ -1490,27 +1557,23 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
                    for part in gal["parts"]) / gal["mean_spacing_pc"]
 
     def path_share(share):
-        return _over_parts(0, share) if by_system else share
+        if not by_system:
+            return share
+        return ((1.0 - mixed) * still_hop_m * share
+                + mixed * open_hop_m * _over_parts(0, share)) / hop_m
 
     def hop_growth(share):
         """Length of a hop, in first hops, when a share is surveyed."""
-        return _over_parts(1, share) if by_system else 1.0
+        if not by_system:
+            return 1.0
+        return ((1.0 - mixed) * still_hop_m
+                + mixed * open_hop_m * _over_parts(1, share)) / hop_m
 
     thinning = path_share(1.0)      # mean hop of the survey in first hops
     cruise_s = hop_m / v
     ramp_s = max(0.0, first_hop_s - cruise_s)
     t_hop_s = cruise_s * thinning + ramp_s      # average over the survey
-
-    # Propellant (classical rocket equation; the relativistic correction
-    # is about one percent in the exponent at 0.2 of light speed). Each
-    # visited system costs one braking and one acceleration, a velocity
-    # change of 2 v. Hops too short to reach cruise speed cost less.
-    mass_ratio = math.exp(2.0 * sc.speed_c / sc.exhaust_speed_c)
-    refuel_s = sc.refuel_years_per_mass * (mass_ratio - 1.0) * YEAR_S
-    dwell_s = sc.dwell_years * YEAR_S + refuel_s
     t_sys_s = t_hop_s + dwell_s
-
-    visited_per_probe = gal["systems"] * sc.depth / sc.probes
     work_s = visited_per_probe * t_sys_s
 
     # A region cannot be larger than one probe's whole share of the
@@ -1641,7 +1704,7 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
     # A region is a volume: the one that holds region_systems visited
     # systems at the mean spacing.
     region_side_pc = ((region_systems / sc.depth) ** (1.0 / 3.0)
-                      * gal["mean_spacing_pc"])
+                      * gal["mean_spacing_at_large_pc"])
 
     # Distances -------------------------------------------------------------
     survey_path_m = visited_per_probe * hop_m * thinning * (1.0 + f_dup)
@@ -1673,6 +1736,11 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
         plane_left_at_half=(plane_left(0.5) if any(
             part["kind"] == "disc-plane" for part in gal["parts"]) and
             by_system else None),
+        # how far the stars mix during the survey, and whether it lasts
+        # long enough for waiting at the mid-plane (both None unless
+        # completion is recorded by system)
+        mixing=mixing,
+        plane_wait=plane_wait,
         propellant=dict(
             exhaust_speed_c=sc.exhaust_speed_c,
             mass_ratio_per_stop=mass_ratio,
@@ -2126,45 +2194,83 @@ def describe_reached(r: dict, canonical: bool = False) -> list:
 
     if sc["strategy"] in RECORDS_BY_SYSTEM:
         growth = r["hop_growth"]
-        text = (
+        mixing = r["mixing"]
+        wait = r["plane_wait"]
+        crossings = (human_count(mixing["crossings"], 2)
+                     if mixing["crossings"] >= 10
+                     else sig(mixing["crossings"], 2))
+        lines = fill(
             "Completion is recorded by system: a probe recognizes a system "
             "that was surveyed anywhere and passes it by. No visit is "
-            "repeated, and the milestones count systems. A probe goes to "
-            "the nearest system not yet surveyed and never has to clear a "
-            "volume, so its hops are %s times the spacing of the systems "
-            "still to do, against %s for a route that clears a region "
-            "(simulated). The price is that those systems thin out. The "
-            "stars mix long before the survey ends (a system changes "
-            "region %s to %s times), so a hop is %s times the first ones "
-            "when half are done, %s times at 90%%, and %s times on average."
+            "repeated, and the milestones count systems.")
+        open_field = (
+            "a probe goes to the nearest system not yet surveyed and never "
+            "has to clear a volume, so its hops are %s times the spacing "
+            "of the systems still to do, against %s for a route that "
+            "clears a region (simulated)"
             % (sig(sc["path_factor"] * OPEN_FIELD_HOP / CLEARED_FIELD_HOP, 2),
-               sig(sc["path_factor"], 2),
-               human_count(few, 2), human_count(many, 2),
-               sig(growth["0.5"], 3), sig(growth["0.9"], 3),
-               sig(r["hop_thinning"], 3)))
-        lines = fill(text)
-        if r["plane_left_at_half"] is not None:
+               sig(sc["path_factor"], 2)))
+        grown = ("a hop is %s times the first ones when half are done, %s "
+                 "times at 90%%, and %s times on average"
+                 % (sig(growth["0.5"], 3), sig(growth["0.9"], 3),
+                    sig(r["hop_thinning"], 3)))
+        if mixing["share"] < 0.05:
+            lines += fill(
+                "The stars barely move during a survey this short: a "
+                "system gets %s of the way across one probe's share of the "
+                "galaxy. The systems still to do stay where they were, "
+                "each probe clears its own share, and the survey runs as "
+                "it would by regions." % percent(mixing["crossings"]))
+        elif mixing["share"] < 0.995:
+            lines += fill(
+                "The stars mix only in part during a survey this short: a "
+                "system crosses one probe's share of the galaxy %s times. "
+                "The figures are weighted, %s to %s, between two cases. "
+                "With stars that stand still the survey runs as it would "
+                "by regions. With stars that mix fully %s, and those "
+                "systems thin out among the ones already done. Here %s."
+                % (crossings, percent(1.0 - mixing["share"]),
+                   percent(mixing["share"]), open_field, grown))
+        else:
+            lines += fill(
+                "%s%s. The price is that those systems thin out. The stars "
+                "mix long before the survey ends (a system crosses one "
+                "probe's share of the galaxy %s times), so %s."
+                % (open_field[0].upper(), open_field[1:], crossings, grown))
+        if wait is not None and not wait["waits"]:
+            lines += fill(
+                "Waiting at the mid-plane does not work for a survey this "
+                "short. A star takes about %s to swing up through the "
+                "plane, down through it and back; the survey is over after "
+                "%s such swings, and waiting pays only from %s on "
+                "(simulated). The probes go to the systems instead, as "
+                "with --strategy systems."
+                % (fmt_duration(wait["swing_years"], canonical, 2),
+                   sig(wait["swings"], 2), sig(PLANE_SWINGS_NEEDED, 2)))
+        elif r["plane_left_at_half"] is not None:
             lines += fill(
                 "The probes wait in a thin layer at the mid-plane of the "
-                "disc and take each system as it passes through, which "
-                "every disc system does every few tens of millions of "
-                "years. Systems are closest together there: the first hops "
-                "are %s parsecs, against %s for a fleet spread like the "
-                "systems. But a system that swings far above and below the "
-                "plane is rarely near it, and such systems are left for "
-                "last: when half of all systems are done, only %s of those "
-                "near the mid-plane are still to do. That uses up the head "
-                "start. Half of the systems are reached sooner than by a "
-                "fleet spread like the systems (--strategy systems); 90%% "
-                "and 99%% are reached at the same time, within three "
-                "percent in simulation."
-                % (sig(r["hop_parsec"], 3),
+                "disc and take each system as it passes through; a star "
+                "swings up through the plane, down through it and back in "
+                "about %s, %s times during the survey. Systems are closest "
+                "together there: the first hops are %s parsecs, against %s "
+                "for a fleet spread like the systems. But a system that "
+                "swings far above and below the plane is rarely near it, "
+                "and such systems are left for last: when half of all "
+                "systems are done, only %s of those near the mid-plane are "
+                "still to do. That uses up the head start. Half of the "
+                "systems are reached sooner than by a fleet spread like "
+                "the systems (--strategy systems); 90%% and 99%% are "
+                "reached at the same time, within three percent in "
+                "simulation."
+                % (fmt_duration(wait["swing_years"], canonical, 2),
+                   sig(wait["swings"], 2), sig(r["hop_parsec"], 3),
                    sig(r["hop_parsec"]
-                       * r["galaxy"].get("mean_spacing_at_large_pc",
-                                         r["galaxy"]["mean_spacing_pc"])
+                       * r["galaxy"]["mean_spacing_at_large_pc"]
                        / r["galaxy"]["mean_spacing_pc"], 3),
                    percent(r["plane_left_at_half"])))
-        elif sc["strategy"] == "systems" and r["galaxy"]["model"] != "uniform":
+        elif (sc["strategy"] == "systems" and mixing["share"] >= 0.995
+              and r["galaxy"]["model"] != "uniform"):
             lines += fill(
                 "The probes stay spread through the disc like its systems. "
                 "Waiting at the mid-plane instead (--strategy "
@@ -2853,6 +2959,25 @@ def render_explain(r: dict) -> str:
             "the" % (r["hop_growth"]["0.9"], r["hop_thinning"]),
             "  survey = %.4g years" % r["hop_years_average"],
         ]
+        lines += [
+            "  a star crosses one probe's share of the galaxy (%.4g parsecs "
+            "across)" % r["mixing"]["probe_share_side_parsec"],
+            "  %.4g times during the survey; share of the mixed law = 1 - "
+            "exp(-crossings)" % r["mixing"]["crossings"],
+            "  = %.4g, the rest being a field of stars that stand still"
+            % r["mixing"]["share"],
+        ]
+        if r["plane_wait"] is not None:
+            lines += [
+                "  one swing through the mid-plane and back = %.3g scale "
+                "heights / %.3g" % (PLANE_SWING_IN_HEIGHTS,
+                                    RANDOM_SPEEDS_M_S[0] / 1e3),
+                "    kilometers per second = %.4g years; the survey lasts "
+                "%.3g swings" % (r["plane_wait"]["swing_years"],
+                                 r["plane_wait"]["swings"]),
+                "    (waiting at the mid-plane is modeled from %.3g swings "
+                "on)" % PLANE_SWINGS_NEEDED,
+            ]
         if r["plane_left_at_half"] is not None:
             lines += [
                 "  at the mid-plane, with y from 1 - (1 + y) exp(-y) = share "
