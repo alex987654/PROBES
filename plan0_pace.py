@@ -804,32 +804,40 @@ def _part_hop_seconds(part: dict, hop_scale: float, v: float,
     hop length (which is central hop x exp(u / 3))."""
     shortest_m = hop_scale * part["central_spacing_pc"] * PARSEC_M
     ramp_m = v * v / acceleration
-    total = reach = 0.0
+    total = reach = weights = 0.0
     if part["kind"] == "disc":
-        # u = R / L + |z| / h has density exp(-u) min(u, xm)^2 / (2 g1(xm))
+        # u = R / L + |z| / h has density proportional to
+        # exp(-u) min(u, xm)^2
+        # The density has a corner at u = xm, so each side of it gets
+        # its own grid of midpoints.
         xm = part["xm"]
-        du = (xm + 45.0) / steps
-        norm = 2.0 * _g1(xm)
-        for i in range(steps):
-            u = (i + 0.5) * du
-            m = min(u, xm)
-            weight = math.exp(-u) * m * m / norm * du
-            d = shortest_m * math.exp(u / 3.0)
-            total += weight * leg_seconds(d, v, acceleration)
-            if d >= ramp_m:
-                reach += weight
+        for start, stop, count in ((0.0, xm, steps // 3),
+                                   (xm, xm + 45.0, steps)):
+            du = (stop - start) / count
+            for i in range(count):
+                u = start + (i + 0.5) * du
+                m = min(u, xm)
+                weight = math.exp(-u) * m * m * du
+                d = shortest_m * math.exp(u / 3.0)
+                weights += weight
+                total += weight * leg_seconds(d, v, acceleration)
+                if d >= ramp_m:
+                    reach += weight
     else:
-        # q = r^2 / (2 s^2) = y^2 has density (4 / sqrt(pi)) y^2 exp(-y^2)
+        # q = r^2 / (2 s^2) = y^2 has density proportional to
+        # y^2 exp(-y^2)
         dy = 8.0 / steps
-        norm = 4.0 / math.sqrt(math.pi)
         for i in range(steps):
             y = (i + 0.5) * dy
-            weight = norm * y * y * math.exp(-y * y) * dy
+            weight = y * y * math.exp(-y * y)
             d = shortest_m * math.exp(y * y / 3.0)
+            weights += weight
             total += weight * leg_seconds(d, v, acceleration)
             if d >= ramp_m:
                 reach += weight
-    return total, reach
+    # Dividing by the summed weights, not by the exact normalization,
+    # keeps the shares adding up to one whatever the step size.
+    return total / weights, reach / weights
 
 
 def mean_hop_seconds(gal: dict, hop_scale: float, v: float,

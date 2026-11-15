@@ -1084,6 +1084,25 @@ class TestStopAndGo(unittest.TestCase):
                                    places=4, msg=part["kind"])
             self.assertAlmostEqual(share, 1.0, places=4, msg=part["kind"])
 
+    def test_shares_add_up_for_a_disc_smaller_than_its_scale_length(self):
+        # Found by a sweep over random scenarios: the weights of the
+        # numerical average summed to 1.00007 here, so the share of hops
+        # reaching cruise speed could exceed one.
+        sc = pp.Scenario(disc_radius_kpc=3.9, scale_length_kpc=11.2,
+                         bulge_fraction=0.0, acceleration_m_s2=0.035,
+                         speed_c=0.09)
+        r = pp.derive(sc)
+        self.assertLessEqual(r["kinematics"]["hops_reaching_cruise"], 1.0)
+        gal = r["galaxy"]
+        v = sc.speed_c * pp.C_M_PER_S
+        seconds, share = pp._part_hop_seconds(gal["parts"][0],
+                                              sc.path_factor, v, 1e6)
+        mean_m = (sc.path_factor * gal["parts"][0]["mean_spacing_pc"]
+                  * pp.PARSEC_M)
+        self.assertAlmostEqual(seconds / (mean_m / v + v / 1e6), 1.0,
+                               places=4)
+        self.assertAlmostEqual(share, 1.0, places=12)
+
     def test_numerical_average_matches_sampled_systems(self):
         # Weak engines: many hops never reach cruise speed. Compare with
         # hops drawn from the density field itself.
