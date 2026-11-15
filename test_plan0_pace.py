@@ -1000,6 +1000,10 @@ class TestReportWording(unittest.TestCase):
                                     attrition_per_year=1e-8))
         yield "odd report", pp.render_report(odd)
         yield "odd explain", pp.render_explain(odd)
+        short = pp.derive(pp.Scenario(systems=2e5))
+        yield "short survey", pp.render_report(short)
+        lossy = pp.derive(pp.Scenario(attrition_per_year=5e-10))
+        yield "further passes out of reach", pp.render_report(lossy)
         for kwargs in [dict(), dict(stellar_density=0.1, systems=2e11),
                        dict(acceleration_m_s2=0.003),
                        dict(speed_c=0.2, exhaust_speed_c=0.05,
@@ -1175,6 +1179,154 @@ class TestStopAndGo(unittest.TestCase):
         self.assertIn("Cruise speed is reached on only", given)
 
 
+class TestSystemsReached(unittest.TestCase):
+    """A region is a catalogued volume (Lexicon 5.1) and completion is
+    recorded by region, while the stars drift from region to region."""
+
+    def test_limits_of_the_drift_law(self):
+        full = 1e6                               # region changes per pass
+        self.assertEqual(pp.share_seen(0.0), 1.0)            # nothing moves
+        self.assertAlmostEqual(pp.share_seen(full), 1 - math.exp(-1))
+        self.assertAlmostEqual(pp.share_seen(full, 2.0), 1 - math.exp(-2))
+        self.assertAlmostEqual(pp.share_seen(full, 0.5), 1 - math.exp(-0.5))
+        self.assertAlmostEqual(pp.share_seen(0.0, 0.5), 0.5)  # straight line
+        self.assertEqual(pp.share_seen(full, 0.0), 0.0)
+        for changes in (0.0, 0.5, 3.0, 50.0):
+            self.assertAlmostEqual(pp.share_seen(changes, 1.0 - 1e-9),
+                                   pp.share_seen(changes, 1.0), places=6)
+            by_passes = [pp.share_seen(changes, w)
+                         for w in (0.1, 0.5, 1.0, 1.5, 3.0, 10.0)]
+            self.assertEqual(by_passes, sorted(by_passes))
+        by_changes = [pp.share_seen(m) for m in (0, 0.3, 1, 3, 10, 100)]
+        self.assertEqual(by_changes, sorted(by_changes, reverse=True))
+        # A pass that visits three systems in ten.
+        self.assertAlmostEqual(pp.share_seen(0.0, 1.0, 0.3), 0.3)
+        self.assertAlmostEqual(pp.share_seen(full, 1.0, 0.3),
+                               1 - math.exp(-0.3))
+
+    def test_passes_needed_for_a_share(self):
+        for share in (0.5, 0.9, 0.99):
+            self.assertAlmostEqual(pp.passes_for_share(share, 1e6),
+                                   -math.log(1 - share), places=6)
+            # The same as the extra work of choosing at random (audit
+            # C6): +39, +156 and +365 percent.
+            self.assertAlmostEqual(
+                pp.passes_for_share(share, 1e6) / share - 1,
+                {0.5: 0.386, 0.9: 1.558, 0.99: 3.652}[share], places=3)
+            self.assertAlmostEqual(
+                pp.share_seen(1e6, pp.passes_for_share(share, 1e6)), share)
+        self.assertAlmostEqual(pp.passes_for_share(0.5, 0.0), 0.5, places=6)
+        self.assertAlmostEqual(pp.passes_for_share(1.0, 0.0), 1.0, places=6)
+        self.assertTrue(math.isinf(pp.passes_for_share(0.99, 1e6, 1e-7)))
+
+    @staticmethod
+    def simulate(changes, passes, seed, side=14, per_cell=10):
+        """Systems move in straight lines over a square of cells that
+        wraps around. In every pass each cell is surveyed once, at a
+        random moment, and every system found in it is visited. Returns
+        the share of systems visited at least once."""
+        rng = random.Random(seed)
+        count = side * side * per_cell
+        # A unit of path crosses 4 / pi cell borders on average.
+        speed = changes * math.pi / 4.0
+        start = [(rng.uniform(0, side), rng.uniform(0, side),
+                  rng.uniform(0, 2 * math.pi)) for _ in range(count)]
+        seen = [False] * count
+        for number in range(passes):
+            order = list(range(side * side))
+            rng.shuffle(order)
+            for slot, cell in enumerate(order):
+                when = number + (slot + 0.5) / len(order)
+                col, row = cell % side, cell // side
+                for index, (x, y, angle) in enumerate(start):
+                    if (int((x + speed * math.cos(angle) * when) % side)
+                            == col and
+                            int((y + speed * math.sin(angle) * when) % side)
+                            == row):
+                        seen[index] = True
+        return sum(seen) / count
+
+    def test_drift_law_against_a_small_simulation(self):
+        self.assertEqual(self.simulate(0.0, 1, 1), 1.0)
+        for changes, passes in ((2.0, 1), (40.0, 1), (40.0, 2)):
+            self.assertAlmostEqual(
+                self.simulate(changes, passes, 3),
+                pp.share_seen(changes, passes), delta=0.04,
+                msg=(changes, passes))
+
+    def test_default_survey_is_fully_mixed(self):
+        r = pp.derive(pp.Scenario())
+        reached = r["reached"]
+        # A region of 1000 systems at a mean spacing of 2.02 parsecs.
+        self.assertAlmostEqual(reached["region_side_parsec"],
+                               10 * r["galaxy"]["mean_spacing_pc"])
+        slow, fast = reached["crossing_years"]
+        self.assertAlmostEqual(
+            slow, reached["region_side_parsec"] * pp.PARSEC_M / 2.0e4
+            / pp.YEAR_S)
+        self.assertAlmostEqual(slow / fast, 3.0)
+        survey = r["total_years"] - r["phases"]["dispersal_years"]
+        self.assertAlmostEqual(reached["region_changes_per_pass"][0],
+                               survey / slow)
+        self.assertGreater(min(reached["region_changes_per_pass"]), 1000)
+        self.assertLess(max(reached["region_changes_per_pass"]), 5000)
+        self.assertAlmostEqual(reached["seen_after_one_pass"],
+                               1 - math.exp(-1), places=9)
+        self.assertAlmostEqual(reached["repeat_visit_share"], math.exp(-1),
+                               places=9)
+        self.assertAlmostEqual(
+            reached["stream_crossing_years"],
+            reached["region_side_parsec"] * pp.PARSEC_M / 2.3e5 / pp.YEAR_S)
+        for row, passes in zip(reached["rows"],
+                               (math.log(2), math.log(10), math.log(100))):
+            self.assertAlmostEqual(row["passes"], passes, places=6)
+            self.assertAlmostEqual(
+                row["years"] / (r["phases"]["dispersal_years"]
+                                + passes * survey), 1.0, places=6)
+        # 99 percent of the systems: 4.6 passes, 5.3 billion years.
+        self.assertAlmostEqual(reached["rows"][2]["years"] / 5.26e9, 1.0,
+                               delta=0.01)
+
+    def test_a_short_survey_is_not_affected(self):
+        r = pp.derive(pp.Scenario(systems=2e5))
+        self.assertLess(r["total_years"], 3e6)
+        self.assertLess(max(r["reached"]["region_changes_per_pass"]), 0.1)
+        self.assertGreater(r["reached"]["seen_after_one_pass"], 0.995)
+        text = " ".join(pp.render_report(r).split())
+        self.assertIn("Stars barely move during a survey this short", text)
+        self.assertNotIn("one pass over every region; stars drift", text)
+
+    def test_report_says_what_one_pass_reaches(self):
+        report = pp.render_report(pp.derive(pp.Scenario()))
+        lines = report.splitlines()
+        at = next(i for i, line in enumerate(lines) if "HEADLINE" in line)
+        block = " ".join(line.strip() for line in lines[at:lines.index("", at)])
+        self.assertIn("that is one pass over every region", block)
+        self.assertIn("reaches about 63% of the systems", block)
+        self.assertIn("Milestones (share of regions surveyed)", report)
+        self.assertNotIn("fraction of systems surveyed", report)
+        text = " ".join(report.split())
+        for phrase in ["Systems reached (regions are fixed volumes",
+                       "one pass over every region reaches 63% of the "
+                       "systems, and 37% of its visits go to systems "
+                       "already seen",
+                       "99% 4.6 5.3 billion years",
+                       "90% 2.3 2.6 billion years",
+                       "50% 0.69 790 million years",
+                       "the fleet stops after one pass"]:
+            self.assertIn(phrase, text)
+
+    def test_losses_can_put_further_passes_out_of_reach(self):
+        r = pp.derive(pp.Scenario(attrition_per_year=5e-10))
+        self.assertFalse(r["fleet_exhausted"])           # one pass is done
+        rows = r["reached"]["rows"]
+        self.assertIsNotNone(rows[0]["years"])           # 0.69 passes
+        self.assertIsNone(rows[1]["years"])              # 2.3 passes
+        self.assertIsNone(rows[2]["years"])
+        self.assertIn("not reached", pp.render_report(r))
+        json.dumps(pp.json_safe(r), allow_nan=False)
+
+
 class TestLeftOut(unittest.TestCase):
     """Audit C6 to C9: the caveats carry numbers for the scenario."""
 
@@ -1220,9 +1372,11 @@ class TestLeftOut(unittest.TestCase):
         low, high = out["drift_out_shares"]
         self.assertAlmostEqual(low, 0.201, delta=0.003)
         self.assertAlmostEqual(high, 0.532, delta=0.003)
-        self.assertAlmostEqual(
-            out["new_system_share"],
-            1.65 * 3.039e9 / (2e11 * 0.54), delta=0.0005)
+        # 1.65 solar masses of new stars a year on 6.08e10: 8 percent
+        # over 3.04 billion years.
+        self.assertAlmostEqual(out["new_system_share"],
+                               1.65 / 6.08e10 * 3.039e9, delta=0.0005)
+        self.assertAlmostEqual(out["new_system_share"], 0.082, delta=0.001)
         self.assertEqual(out["central_load_factor"], 1.0)   # uniform disc
 
     def test_central_load_factor_of_the_exponential_disc(self):
@@ -1252,12 +1406,17 @@ class TestLeftOut(unittest.TestCase):
         for phrase in ["Balance.", "Duplication.", "Deep time.",
                        "Scattering.", "79% would be done",
                        "2.3 times as long",
-                       "regions have to be lists of targets",
+                       "Regions are fixed volumes and the stars move "
+                       "through them",
+                       "A finished volume does not stay finished",
+                       "In the Galactic Standard Frame, which turns with "
+                       "one beacon",
                        "turns of the galaxy at half the disc radius"]:
             self.assertIn(phrase, caveats)
         self.assertIn("%s times as many systems per unit of disc area"
                       % pp.sig(r["left_out"]["central_load_factor"], 2),
                       caveats)
+        self.assertNotIn("lists of targets", text)
         flat = " ".join(pp.render_report(
             pp.derive(pp.Scenario(galaxy_model="uniform"))).split())
         self.assertNotIn("per unit of disc area", flat)

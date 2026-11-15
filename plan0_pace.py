@@ -57,8 +57,10 @@ LINK_REFERENCE_M = 8.0e18
 # Figures used only to put numbers on what the model leaves out.
 ROTATION_SPEED_M_S = 2.3e5              # orbital speed, similar at all radii
 RANDOM_SPEEDS_M_S = (2.0e4, 6.0e4)      # stars relative to their neighbors
-STAR_FORMATION_SOLAR_MASSES_PER_YEAR = 1.65     # Licquia and Newman 2015
-SOLAR_MASSES_PER_SYSTEM = 0.54                  # see DEFAULT_SYSTEMS
+# New stars per year as a share of the stars that exist: 1.65 solar masses
+# per year on 6.08e10 (Licquia and Newman 2015). A share, so that it holds
+# for any system count.
+STAR_FORMATION_SHARE_PER_YEAR = 2.71e-11
 STORED_ENERGY_LEG_YEARS = 1.0e4         # cruise leg named in section 6.1
 # Simulated: 10,000 seeds scattered at random through a uniform disc, each
 # probe keeping to the systems nearest its seed, no work handed over.
@@ -896,6 +898,108 @@ def share_leaving_cube(x: float) -> float:
     return 1.0 - stay / steps ** 2
 
 
+# ---------------------------------------------------------------------------
+# What a pass over fixed-volume regions reaches while stars drift
+# ---------------------------------------------------------------------------
+#
+# A region is a catalogued volume (Lexicon section 5.1) and completion is
+# recorded per region. The stars do not stay put: at 20 to 60 kilometers
+# per second relative to their neighbors a system leaves a region of 1000
+# systems within a million years, thousands of times during the survey.
+# A pass over every region therefore makes one visit per system on
+# average, but which systems it meets is a matter of chance. With frequent
+# region changes the number of visits a system receives follows the
+# Poisson law with mean 1: a share exp(-1) = 37 percent is never met, and
+# as many visits go to systems already seen.
+#
+# share missed in one pass = exp(-1) x mixed, mixed = 1 - exp(-changes / 2)
+#
+# "changes" is how often a system changes region during one pass. The
+# factor "mixed" joins the two limits, nothing moving (nothing missed) and
+# full mixing. It matches a simulation of systems moving in straight lines
+# through a grid of cells, each cell surveyed once per pass, to within
+# 0.02 for 0.3 to 300 changes per pass and for one to three passes. For
+# any galaxy-sized survey it equals 1.
+#
+# Nothing here lets a probe recognize a system that was surveyed in
+# another region; the specification records completion by region only.
+
+
+def share_seen(changes_per_pass: float, passes: float = 1.0,
+               depth: float = 1.0) -> float:
+    """Share of all systems visited at least once after so many passes
+    over every region. `depth` is the share of the systems found in a
+    region that a pass visits."""
+    if passes <= 0.0:
+        return 0.0
+    mixed = -math.expm1(-changes_per_pass / 2.0) if changes_per_pass > 0 \
+        else 0.0
+    if passes < 1.0:
+        # Within a pass: a straight line where nothing moves, the Poisson
+        # curve where everything mixes.
+        return ((1.0 - mixed) * depth * passes
+                + mixed * -math.expm1(-depth * passes))
+    missed_once = (1.0 - depth) + (math.exp(-depth) - (1.0 - depth)) * mixed
+    return 1.0 - missed_once ** passes
+
+
+def passes_for_share(share: float, changes_per_pass: float,
+                     depth: float = 1.0) -> float:
+    """Passes over every region needed before the given share of all
+    systems has been visited at least once (infinite if out of reach)."""
+    low, high = 0.0, 1.0
+    while share_seen(changes_per_pass, high, depth) < share:
+        low, high = high, high * 2.0
+        if high > 1e6:
+            return math.inf
+    for _ in range(100):
+        mid = 0.5 * (low + high)
+        if share_seen(changes_per_pass, mid, depth) < share:
+            low = mid
+        else:
+            high = mid
+    return high
+
+
+REACHED_SHARES = (0.5, 0.9, 0.99)
+
+
+def systems_reached(sc: Scenario, side_pc: float, dispersal_s: float,
+                    survey_s: float) -> dict:
+    """What passes over the fixed-volume regions reach while the stars
+    drift through them. `side_pc` is the size of one region."""
+    # Time for a system to cross one region at each random speed, and
+    # how often it does so during one pass.
+    crossing_years = [side_pc * PARSEC_M / speed / YEAR_S
+                      for speed in RANDOM_SPEEDS_M_S]
+    changes = [survey_s / YEAR_S / years for years in crossing_years]
+    # The slower speed mixes least; it is used so as not to overstate.
+    least = min(changes)
+    seen_once = share_seen(least, 1.0, sc.depth)
+    rows = []
+    for share in REACHED_SHARES:
+        passes = passes_for_share(share, least, sc.depth)
+        seconds = (None if math.isinf(passes) else
+                   _survey_time_for_fraction(sc, dispersal_s, survey_s,
+                                             passes))
+        rows.append(dict(
+            systems_seen=share, passes=passes,
+            years=(None if seconds is None
+                   else (dispersal_s + seconds) / YEAR_S)))
+    return dict(
+        region_side_parsec=side_pc,
+        crossing_years=crossing_years,
+        region_changes_per_pass=changes,
+        # the same at the full orbital speed: how fast stars stream
+        # through a volume that does not turn with them
+        stream_crossing_years=(side_pc * PARSEC_M / ROTATION_SPEED_M_S
+                               / YEAR_S),
+        seen_after_one_pass=seen_once,
+        # visits of one pass that go to systems already seen
+        repeat_visit_share=1.0 - seen_once / sc.depth,
+        rows=rows)
+
+
 def central_load_factor(sc: Scenario, gal: dict) -> float:
     """Systems per unit of disc area at the center, over the average.
     With seeds spread evenly over the disc area this is how many times
@@ -913,14 +1017,12 @@ def central_load_factor(sc: Scenario, gal: dict) -> float:
 
 
 def left_out(sc: Scenario, gal: dict, nominal_years: float,
-             region_cycle_years: float, region_systems: float,
+             region_cycle_years: float, side_pc: float,
              stay_years: float, dispersal_years: float) -> dict:
-    """Sizes of the effects the model does not follow, for the caveats."""
+    """Sizes of the effects the model does not follow, for the caveats.
+    `side_pc` is the size of one region."""
     half_radius_m = sc.disc_radius_kpc / 2.0 * KPC_M
     turn_years = 2.0 * math.pi * half_radius_m / ROTATION_SPEED_M_S / YEAR_S
-    # A region of this many visited systems at the mean spacing.
-    side_pc = (region_systems / sc.depth) ** (1.0 / 3.0) \
-        * gal["mean_spacing_pc"]
     drift = []
     for speed in RANDOM_SPEEDS_M_S:
         moved_pc = speed * region_cycle_years * YEAR_S / PARSEC_M
@@ -935,9 +1037,7 @@ def left_out(sc: Scenario, gal: dict, nominal_years: float,
         shear_years=half_radius_m / ROTATION_SPEED_M_S / YEAR_S,
         region_side_parsec=side_pc,
         drift_out_shares=drift,
-        new_system_share=(STAR_FORMATION_SOLAR_MASSES_PER_YEAR
-                          * nominal_years
-                          / (gal["systems"] * SOLAR_MASSES_PER_SYSTEM)),
+        new_system_share=STAR_FORMATION_SHARE_PER_YEAR * nominal_years,
         central_load_factor=central_load_factor(sc, gal),
         scattering_stops=stops,
         scattering_stop_years=stops * stay_years)
@@ -1131,6 +1231,11 @@ def derive(sc: Scenario, detail: bool = True) -> dict:
     link_s_per_probe = messages_per_probe * link_s_per_message
     fleet_messages = messages_per_probe * sc.probes
 
+    # A region is a volume: the one that holds region_systems visited
+    # systems at the mean spacing.
+    region_side_pc = ((region_systems / sc.depth) ** (1.0 / 3.0)
+                      * gal["mean_spacing_pc"])
+
     # Distances -------------------------------------------------------------
     survey_path_m = visited_per_probe * hop_m * (1.0 + f_dup)
     dispersal_m = leg_kpc * KPC_M       # an upper bound for any probe
@@ -1217,9 +1322,13 @@ def derive(sc: Scenario, detail: bool = True) -> dict:
             link_seconds_per_message=link_s_per_message,
             link_years_per_probe=link_s_per_probe / YEAR_S,
         ),
+        # Milestones count regions surveyed; this block says what share
+        # of the systems that reaches while they drift between regions.
+        reached=systems_reached(sc, region_side_pc, dispersal_s,
+                                survey_s) if detail else None,
         left_out=left_out(
             sc, gal, (dispersal_s + survey_s) / YEAR_S, t_region_s / YEAR_S,
-            region_systems, dwell_s / YEAR_S,
+            region_side_pc, dwell_s / YEAR_S,
             dispersal_s / YEAR_S) if detail else None,
         distance=dict(
             dispersal_m=dispersal_m,
@@ -1552,6 +1661,49 @@ def describe_kinematics(r: dict, canonical: bool = False) -> list:
     return fill(text)
 
 
+def describe_reached(r: dict, canonical: bool = False) -> list:
+    """Report lines on the share of the systems that passes over the
+    fixed-volume regions reach while the stars drift through them."""
+    reached = r["reached"]
+    sc = r["scenario"]
+    slow, fast = max(reached["crossing_years"]), min(reached["crossing_years"])
+    few, many = (min(reached["region_changes_per_pass"]),
+                 max(reached["region_changes_per_pass"]))
+    speeds = "%s to %s kilometers per second" % (
+        sig(RANDOM_SPEEDS_M_S[0] / 1e3, 2), sig(RANDOM_SPEEDS_M_S[1] / 1e3, 2))
+    seen = reached["seen_after_one_pass"]
+    if seen >= 0.995 * sc["depth"]:
+        return fill(
+            "Stars barely move during a survey this short: at %s a system "
+            "needs %s to cross one region, so it changes region %s times at "
+            "most during the pass, and one pass reaches %s%% of the systems."
+            % (speeds, fmt_span(fast, slow, canonical), sig(many, 2),
+               sig(100.0 * seen, 3)))
+    lines = fill(
+        "A region is a volume, and completion is recorded by region. At "
+        "%s a system crosses one region in %s, so it changes region %s to "
+        "%s times during one pass. Which systems a pass meets is therefore "
+        "a matter of chance: one pass over every region reaches %s of the "
+        "systems, and %s of its visits go to systems already seen."
+        % (speeds, fmt_span(fast, slow, canonical), human_count(few, 2),
+           human_count(many, 2), percent(seen),
+           percent(reached["repeat_visit_share"])))
+    lines.append("    %-30s %-9s %s" % ("systems seen at least once",
+                                        "passes", "time"))
+    for row in reached["rows"]:
+        lines.append("    %-30s %-9s %s" % (
+            "%.0f%%" % (100 * row["systems_seen"]),
+            "never" if math.isinf(row["passes"]) else sig(row["passes"], 2),
+            "not reached" if row["years"] is None
+            else fmt_duration(row["years"], canonical)))
+    lines += fill(
+        "A further pass needs the completion records of the one before to "
+        "lapse. As the specification stands a finished region stays "
+        "finished, and the fleet stops after one pass. Nothing lets a probe "
+        "recognize a system that was surveyed in another region.")
+    return lines
+
+
 def describe_left_out(r: dict, canonical: bool = False) -> list:
     """The caveats, each with its size for this scenario."""
     out = r["left_out"]
@@ -1581,19 +1733,26 @@ def describe_left_out(r: dict, canonical: bool = False) -> list:
     deep = (
         "Deep time. The survey lasts %s turns of the galaxy at half the "
         "disc radius, and two points on neighboring orbits there drift "
-        "apart by their own separation every %s, so neither the archive "
-        "network nor the regions hold still. While one region is surveyed "
-        "(%s) the random motion of stars, %s to %s kilometers per second, "
-        "carries %s to %s of them out of a fixed volume of the region's "
-        "size: a finished volume does not stay finished, and regions have "
-        "to be lists of targets. About %s as many systems as are counted "
-        "today form during the survey."
+        "apart by their own separation every %s, so the archive network "
+        "does not hold still. Regions are fixed volumes and the stars move "
+        "through them: while one region is surveyed (%s) the random motion "
+        "of stars, %s to %s kilometers per second, replaces %s to %s of its "
+        "systems. In the Galactic Standard Frame, which turns with one "
+        "beacon, stars at other distances from the center also stream "
+        "through, at up to the orbital speed of %s kilometers per second, "
+        "which replaces the whole content of a region in %s. A finished "
+        "volume does not stay finished; \"Systems reached\" above gives "
+        "what that costs. About %s as many systems as are counted today "
+        "form during the survey."
         % (sig(out["turns_at_half_radius"], 2),
            fmt_duration(out["shear_years"], canonical),
            fmt_duration(r["region_cycle_years"], canonical),
            sig(RANDOM_SPEEDS_M_S[0] / 1e3, 2),
            sig(RANDOM_SPEEDS_M_S[1] / 1e3, 2),
-           percent(low), percent(high), percent(out["new_system_share"])))
+           percent(low), percent(high),
+           sig(ROTATION_SPEED_M_S / 1e3, 2),
+           fmt_duration(r["reached"]["stream_crossing_years"], canonical),
+           percent(out["new_system_share"])))
     scattering = (
         "Scattering. Counted as one uninterrupted cruise, although "
         "Physical Layer 6.1 has probes refuel at stars. A stop every %s "
@@ -1760,6 +1919,14 @@ def render_report(r: dict, canonical: bool = False) -> str:
                 "5 to 95 percent interval")
     for line in _wrap("", text):
         add(line)
+    reached = r["reached"]
+    if reached["seen_after_one_pass"] < 0.995 * sc["depth"]:
+        for line in _wrap("", "that is one pass over every region; stars "
+                              "drift between regions meanwhile, so it "
+                              "reaches about %s of the systems (see Systems "
+                              "reached)"
+                          % percent(reached["seen_after_one_pass"])):
+            add(line)
     if r["scale_estimate"] and not r["fleet_exhausted"]:
         for line in _wrap("", "a scale estimate only: past %s the galaxy "
                               "itself turns, shears and forms new stars, "
@@ -1795,11 +1962,16 @@ def render_report(r: dict, canonical: bool = False) -> str:
                                    canonical))):
             add(line)
     add("")
-    add("Milestones (fraction of systems surveyed)")
+    add("Milestones (share of regions surveyed)")
     add("-" * 60)
     for m in r["milestones"]:
         add("  %4.0f%%   %s" % (100 * m["fraction"],
                                 fmt_years(m["years"], canonical, digits=2)))
+    add("")
+    add("Systems reached (regions are fixed volumes; stars drift through)")
+    add("-" * 60)
+    for line in describe_reached(r, canonical):
+        add(line)
     if u:
         add("")
         for line in render_ranges(u, canonical):
@@ -2149,12 +2321,14 @@ archive layouts (--archives NAME):
 
 what the output shows:
   A headline duration, a phase-by-phase breakdown, milestone times for
-  half, ninety percent, ninety-nine percent, and full coverage, the
-  distance traveled per probe and fleet-wide, message counts with their
-  transmission time, and the assumptions the numbers rest on. Durations
-  appear in years and also in seconds; distances in light-years and
-  also in meters (one light-year is about 9.46e15 meters; one parsec
-  is about 3.26 light-years; one kiloparsec is one thousand parsecs).
+  half, ninety percent, ninety-nine percent, and all of the regions, the
+  share of the star systems that this reaches while they drift from
+  region to region, the distance traveled per probe and fleet-wide,
+  message counts with their transmission time, and the assumptions the
+  numbers rest on. Durations appear in years and also in seconds;
+  distances in light-years and also in meters (one light-year is about
+  9.46e15 meters; one parsec is about 3.26 light-years; one kiloparsec
+  is one thousand parsecs).
   The headline is rounded to two digits, because the inputs do not
   support a third.
 
