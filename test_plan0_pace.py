@@ -1262,6 +1262,23 @@ class TestLossThreshold(unittest.TestCase):
             self.assertAlmostEqual(
                 r["attrition"]["mean_life_needed_years"] * rate, 1.0)
 
+    def test_survey_far_shorter_than_scattering_does_not_overflow(self):
+        # Found by a sweep over random scenarios: with far more probes
+        # than systems the survey lasts about a thousand years while
+        # scattering lasts millions, and exp(rate x scattering)
+        # overflowed once scattering / survey passed 709.
+        r = pp.derive(pp.Scenario(probes=900_000_000, systems=2e6))
+        scattering = r["phases"]["dispersal_years"]
+        survey = r["total_years"] - scattering
+        self.assertGreater(scattering / survey, 710)
+        rate = r["attrition"]["threshold_per_year"]
+        self.assertGreater(rate, 0.0)
+        self.assertAlmostEqual(
+            math.log(rate) + rate * scattering + math.log(survey), 0.0,
+            places=6)
+        self.assertIn("The survey can finish only if the loss rate",
+                      " ".join(pp.render_report(r).split()))
+
     def test_threshold_separates_finishing_from_running_out(self):
         for kwargs in [dict(), dict(envelope_factor=300.0)]:
             rate = pp.derive(pp.Scenario(**kwargs))["attrition"][

@@ -1253,13 +1253,18 @@ def loss_rate_threshold(dispersal_s: float, survey_s: float) -> float:
     The survey needs survey_s per starting probe, so it finishes only if
         L x exp(L x scattering time) x survey_s <= 1.
     For a short scattering phase that is L below 1 / survey time."""
+    # Compared in logarithms: with a survey much shorter than the
+    # scattering phase the exponential itself would overflow.
     low, high = 0.0, 1.0 / survey_s
     for _ in range(200):
         mid = 0.5 * (low + high)
-        if mid * math.exp(mid * dispersal_s) * survey_s < 1.0:
+        if mid > 0.0 and (math.log(mid) + mid * dispersal_s
+                          + math.log(survey_s)) < 0.0:
             low = mid
-        else:
+        elif mid > 0.0:
             high = mid
+        else:
+            break
     return low
 
 
