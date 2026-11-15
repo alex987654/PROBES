@@ -14,6 +14,7 @@ documents in this repository.
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import math
 import random
@@ -233,6 +234,7 @@ _NUMBER_RULES = {
     "dup_cap": (0, True, None, False),
     "dup_gain": (0, True, None, False),
     "neighbors": (0, True, None, False),
+    "confidence": (0, False, 1, False),
 }
 _WHOLE_NUMBER_FIELDS = ("probes", "station_count", "deposit_every",
                         "neighbors")
@@ -311,6 +313,12 @@ class Scenario:
     dup_cap: float = 0.5                 # ceiling on duplicated-work fraction
     dup_gain: float = 1.0                # tuning gain on duplication model
     neighbors: int = 6                   # planar node degree; section 4.3
+    # How sure a probe must be that a system it takes for unsurveyed has
+    # not been surveyed by another probe meanwhile (the plan: 95 times in
+    # 100). It sets how fresh a probe's knowledge has to be, which the
+    # report states; the survey time follows from how fresh the archive
+    # layout actually keeps it.
+    confidence: float = 0.95
 
     def __post_init__(self) -> None:
         # A scenario file may spell a whole number as 10000.0; accept that.
@@ -539,6 +547,9 @@ INPUT_TABLE = [
      "tuning of the duplication estimate, not measured"),
     ("neighbors", None, None, None, False,
      "Physical Layer section 4.3"),
+    ("confidence", None, None, None, False,
+     "the plan: a probe relies on what it knows of the work of the others "
+     "while that is right 95 times in 100"),
 ]
 
 DEFAULT_DRAWS = 2000
@@ -913,6 +924,7 @@ def _even_work(share: float) -> float:
     return 1.5 * (1.0 - (1.0 - min(1.0, share)) ** (2.0 / 3.0))
 
 
+@functools.lru_cache(maxsize=1024)
 def _plane_progress(share: float) -> float:
     """The measure y with 1 - (1 + y) exp(-y) = share surveyed."""
     if share <= 0.0:
@@ -984,6 +996,77 @@ _WORK = {"disc": (_spread_work, _spread_growth),
 
 # Accelerations quoted for comparison when none is given.
 REFERENCE_ACCELERATIONS = (1.0, 0.1, 0.01)
+
+
+# ---------------------------------------------------------------------------
+# Out-of-date knowledge where completion is recorded by system
+#
+# A probe knows its own work at once and the work of the others only after
+# a delay. Meanwhile it takes for unsurveyed some systems that another
+# probe has finished, and a visit to one of those is wasted. With u such
+# systems per system still to do (simulated: eight probes among 64,000
+# drifting systems, knowledge up to a quarter of the survey old):
+#   - of the visits, u / (1 + u) are wasted (the simulation gives 0.6 to
+#     1.0 of that: probes that keep apart meet fewer of them);
+#   - a system then costs (1 + u) times as long, within 3 percent.
+# During a delay the others finish, at that slowed pace, the share
+#   delay / ((1 + u) x time per system x systems per probe)
+# of all systems, so
+#   u (1 + u) = load = delay / (systems per probe x share still to do
+#                               x time per system).
+# Without any shared record the same law runs 14 to 80 percent high from
+# 90 percent done onward; the calculator holds that case at its ceiling.
+# ---------------------------------------------------------------------------
+
+KNOWLEDGE_MARKS = (0.0, 0.5, 0.9, 0.99)
+
+
+def unknown_done_ratio(load: float) -> float:
+    """Systems finished by others without the probe knowing, per system
+    still to do: the u with u (1 + u) = load."""
+    return 0.5 * (math.sqrt(1.0 + 4.0 * load) - 1.0)
+
+
+def stale_knowledge(delay_s: float, load_per_second, last: float,
+                    need=None) -> dict:
+    """What a delay in learning of the others' work costs and allows.
+
+    load_per_second(x) is the load per second of delay when the share
+    exp(-x) of the systems is still to do; `last` is the x at which the
+    last system is done. Returns the wasted time over the delay: the
+    integral of 1 / (1 + u) over x from 0 to `last` (trapezoids one unit
+    wide, where the integrand changes over several units). With `need`,
+    also the share of the systems up to which the load stays below it."""
+    def kept(x):
+        return 1.0 / (1.0 + unknown_done_ratio(delay_s * load_per_second(x)))
+    whole = int(last)
+    values = [kept(float(i)) for i in range(whole + 1)]
+    total = sum(values) - 0.5 * (values[0] + values[-1])
+    if last > whole:
+        total += 0.5 * (values[-1] + kept(last)) * (last - whole)
+    result = dict(wasted_over_delay=total)
+    if need is None:
+        return result
+
+    def short(x):
+        return delay_s * load_per_second(x) > need
+    until = 1.0
+    grid = [float(i) for i in range(whole + 1)] + [last]
+    if len(grid) > 1 and short(grid[0]) and short(grid[1]):
+        until = 0.0
+    else:
+        for low, high in zip(grid[1:], grid[2:]):
+            if short(high):
+                for _ in range(40):
+                    mid = 0.5 * (low + high)
+                    if short(mid):
+                        high = mid
+                    else:
+                        low = mid
+                until = -math.expm1(-0.5 * (low + high))
+                break
+    result["sure_until_share"] = until
+    return result
 
 
 def leg_seconds(distance_m: float, v: float, acceleration) -> float:
@@ -1474,6 +1557,15 @@ def _unused_inputs(sc: Scenario, layout: dict, gal: dict) -> list:
         note("consolidation_years",
              "the chosen layout has no staffed stations, so nothing is "
              "consolidated")
+    if sc.strategy in RECORDS_BY_SYSTEM:
+        note("neighbors",
+             "where completion is recorded by system the duplicated work "
+             "follows from the age of a probe's knowledge, not from the "
+             "number of neighboring probes")
+    else:
+        note("confidence",
+             "it applies where completion is recorded by system (the "
+             "strategies %s)" % " and ".join(RECORDS_BY_SYSTEM))
     return unused
 
 
@@ -1613,6 +1705,10 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
     # the reader's archive point at light speed. Without stations a fact
     # moves only when a probe carries it, so both probes' deposit
     # intervals count and the crossing happens at probe speed.
+    #
+    # Where completion is recorded by system a probe chooses a target at
+    # every hop but reads the archives only when it deposits, so what it
+    # read is older still by up to its own interval between deposits.
     tc_s = sc.consolidation_years * YEAR_S
     spacing_m = (layout["cache_spacing_kpc"] or 0.0) * KPC_M
     if dep_every is None:
@@ -1625,19 +1721,64 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
                 deposit_interval=refresh_s,
                 consolidation_cycle=tc_s,
                 light_between_points=spacing_m / C_M_PER_S)
+            if by_system:
+                staleness_parts["reading_interval"] = refresh_s
         else:
             staleness_parts = dict(
                 deposit_interval=2.0 * refresh_s,
                 carried_between_points=spacing_m / v)
         tau_s = sum(staleness_parts.values())
 
-    # Duplicated-work fraction: each region selection risks colliding with
-    # one of ~`neighbors` adjacent probes whose completions are up to tau
-    # old; the risk per selection scales with how many region cycles of
-    # staleness that represents, spread over the probe's own region budget.
-    # A documented approximation (tunable via dup_gain), capped at dup_cap.
+    # Duplicated-work fraction, by regions: each region selection risks
+    # colliding with one of ~`neighbors` adjacent probes whose completions
+    # are up to tau old; the risk per selection scales with how many region
+    # cycles of staleness that represents, spread over the probe's own
+    # region budget. A documented approximation (tunable via dup_gain),
+    # capped at dup_cap.
+    #
+    # By system: the visits to systems that another probe has finished
+    # without this probe knowing yet (see unknown_done_ratio). The same
+    # law gives how old a probe's knowledge may be for it to be right
+    # about a system it takes for unsurveyed `confidence` times in one.
+    knowledge = None
+    if by_system:
+        others = (sc.probes - 1.0) / sc.probes
+        visited = gal["systems"] * sc.depth
+        last = math.log(visited) if visited > 1.0 else 0.0
+
+        def system_seconds(share):
+            return cruise_s * hop_growth(share) + ramp_s + dwell_s
+
+        def load_per_second(x):
+            left = math.exp(-x)
+            return others / (visited_per_probe * left
+                             * system_seconds(-math.expm1(-x)))
+
+        # the load at which a share 1 - confidence of the visits is wasted
+        need = (1.0 - sc.confidence) / sc.confidence ** 2
+        stale = stale_knowledge(0.0 if math.isinf(tau_s) else tau_s,
+                                load_per_second, last,
+                                need if detail else None)
+        knowledge = dict(
+            confidence=sc.confidence,
+            # how old it may be when this share of the systems is done
+            fresh_enough_years={
+                str(mark): (math.inf if others == 0 else need / load_per_second(
+                    -math.log(1.0 - mark)) / YEAR_S)
+                for mark in KNOWLEDGE_MARKS},
+            # reading whenever it has grown that old, until 99 percent
+            readings_until_99_percent=math.log(100.0) / need,
+            # the share of the systems up to which the layout keeps it
+            # fresh enough (0 without shared archives)
+            sure_until_share=(None if not detail else
+                              0.0 if math.isinf(tau_s) and others > 0
+                              else stale["sure_until_share"]),
+            wasted_over_staleness=stale["wasted_over_delay"] * others)
     if math.isinf(tau_s):
-        f_dup_raw = math.inf
+        f_dup_raw = math.inf if sc.probes > 1 or not by_system else 0.0
+    elif by_system:
+        f_dup_raw = (sc.dup_gain * knowledge["wasted_over_staleness"]
+                     * tau_s / work_s)
     else:
         f_dup_raw = (sc.dup_gain * (tau_s / t_region_s)
                      * sc.neighbors / regions_per_probe)
@@ -1752,6 +1893,9 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
         # completion is recorded by system)
         mixing=mixing,
         plane_wait=plane_wait,
+        # how fresh a probe's knowledge of the others' work must be, and
+        # is (None unless completion is recorded by system)
+        knowledge=knowledge,
         propellant=dict(
             exhaust_speed_c=sc.exhaust_speed_c,
             mass_ratio_per_stop=mass_ratio,
@@ -2055,6 +2199,7 @@ _STALENESS_LABELS = {
     "consolidation_cycle": "waiting for the next consolidation",
     "light_between_points": "light time between archive points",
     "carried_between_points": "carried between boxes at probe speed",
+    "reading_interval": "between readings of the archives",
 }
 
 
@@ -2364,6 +2509,50 @@ def describe_reached(r: dict, canonical: bool = False) -> list:
     return lines
 
 
+def describe_knowledge(r: dict, canonical: bool = False) -> list:
+    """How fresh a probe's knowledge of the others' work has to be, where
+    completion is recorded by system."""
+    know = r["knowledge"]
+    fresh = know["fresh_enough_years"]
+    sure = percent(know["confidence"])
+    if math.isinf(fresh["0.0"]):
+        return fill("A single probe has no other probe's work to learn of.")
+    text = (
+        "A system that a probe takes for unsurveyed may have been surveyed "
+        "by another probe meanwhile, and going there is a wasted visit. "
+        "For the probe to be right %s of the time (--confidence) its "
+        "knowledge may be up to %s old at the start, %s when half of the "
+        "systems are done, %s at 90%% and %s at 99%%. Reading the archives "
+        "whenever it has grown that old takes about %s readings until 99%% "
+        "are done."
+        % (sure, fmt_duration(fresh["0.0"], canonical),
+           fmt_duration(fresh["0.5"], canonical),
+           fmt_duration(fresh["0.9"], canonical),
+           fmt_duration(fresh["0.99"], canonical),
+           sig(know["readings_until_99_percent"], 2)))
+    until = know["sure_until_share"]
+    if r["staleness_infinite"]:
+        text += (" Without shared archives a probe learns nothing of the "
+                 "others' work, so it is never that sure.")
+    elif until >= 1.0:
+        text += " This layout keeps it fresh enough to the last system."
+    elif until <= 0.0:
+        text += " This layout does not keep it that fresh at any stage."
+    else:
+        text += (" This layout keeps it fresh enough until %s of the "
+                 "systems are done." % share_done(until))
+    return fill(text)
+
+
+def share_done(share: float) -> str:
+    """A share close to one as a percentage that still shows what is
+    left: 99.97%, not 100%."""
+    left = 1.0 - share
+    if left >= 0.1:
+        return percent(share)
+    return "%s%%" % (100.0 - float(sig(100.0 * left, 1)))
+
+
 def describe_strategies(r: dict, canonical: bool = False) -> list:
     """Every way of running the survey side by side, for this scenario."""
     lines = []
@@ -2408,11 +2597,22 @@ def describe_left_out(r: dict, canonical: bool = False) -> list:
             "many times the mean load." % sig(out["central_load_factor"], 2))
     balance += (" Moving work between probes is what the archives are for, "
                 "and it is not modeled.")
-    duplication = (
-        "Duplication. The duplicated-work fraction is a rough formula (see "
-        "--explain), not derived from the region-selection rule: it treats "
-        "every choice of a region as an independent draw and holds the "
-        "case without archives at its ceiling by decree.")
+    if r["knowledge"] is not None:
+        duplication = (
+            "Duplication. The duplicated work follows from the age of a "
+            "probe's knowledge (see --explain), as if the systems that "
+            "others have finished meanwhile lay evenly among those still "
+            "to do. In simulation that holds within a few percent for "
+            "knowledge up to a quarter of the survey old; probes that "
+            "keep apart waste somewhat less. A wasted visit is counted "
+            "with its stay. The case without archives is held at its "
+            "ceiling by decree.")
+    else:
+        duplication = (
+            "Duplication. The duplicated-work fraction is a rough formula "
+            "(see --explain), not derived from the region-selection rule: "
+            "it treats every choice of a region as an independent draw and "
+            "holds the case without archives at its ceiling by decree.")
     low, high = out["drift_out_shares"]
     deep = (
         "Deep time. The survey lasts %s turns of the galaxy at half the "
@@ -2753,18 +2953,31 @@ def render_report(r: dict, canonical: bool = False) -> str:
     add("")
     add("Knowledge staleness and duplication")
     add("-" * 60)
+    know = r["knowledge"]
     if r["staleness_infinite"]:
         add("  no shared archives: staleness unbounded, duplication at cap")
     else:
-        add("  completion facts are up to %s old when a region is"
-            % fmt_duration(r["staleness_years"], canonical, 3))
-        add("  chosen, the sum of:")
+        if know is None:
+            add("  completion facts are up to %s old when a region is"
+                % fmt_duration(r["staleness_years"], canonical, 3))
+            add("  chosen, the sum of:")
+        else:
+            add("  what a probe knows of the work of the others is up to")
+            add("  %s old, the sum of:"
+                % fmt_duration(r["staleness_years"], canonical, 3))
         for name, years in r["staleness_parts_years"].items():
             add("    %-36s %s" % (_STALENESS_LABELS[name],
                                   fmt_duration(years, canonical, 3)))
+    if know is not None:
+        for line in describe_knowledge(r, canonical):
+            add(line)
     add("  duplicated-work fraction: %.3g (cap %.2g)"
         % (r["duplication_fraction"], sc["dup_cap"]))
-    if r["duplication_capped"]:
+    if r["duplication_capped"] and know is not None:
+        add("  the estimate sits at its ceiling: knowledge this old is")
+        add("  outside the range the formula was checked for, so the true")
+        add("  duplicated share is not known from this model")
+    elif r["duplication_capped"]:
         add("  the estimate sits at its ceiling: with this few regions per")
         add("  probe (%.3g) the formula is outside its range, so the true"
             % r["regions_per_probe"])
@@ -3032,12 +3245,47 @@ def render_explain(r: dict) -> str:
               for name, years in r["staleness_parts_years"].items()]
     if not r["staleness_infinite"]:
         lines.append("  = %.4g years" % r["staleness_years"])
+    know = r["knowledge"]
+    if know is None:
+        lines += [
+            "duplication fraction = min(cap, gain x (tau / region cycle)",
+            "                           x neighbors / regions per probe)",
+            "  = %.4g   (cap %.2g, gain %.2g, neighbors %d)"
+            % (r["duplication_fraction"], sc["dup_cap"], sc["dup_gain"],
+               sc["neighbors"]),
+        ]
+    else:
+        lines += [
+            "systems finished by others without the probe knowing, per "
+            "system still to do:",
+            "  u with u (1 + u) = tau x (probes - 1) / probes",
+            "      / (systems per probe x share still to do x time per "
+            "system then)",
+            "  of the visits u / (1 + u) are wasted; a system costs (1 + u) "
+            "times as long",
+            "wasted time per probe = tau x (probes - 1) / probes x the "
+            "integral of 1 / (1 + u)",
+            "  over the natural logarithm of 1 / (share still to do), from "
+            "the start to the",
+            "  last system = tau x %.4g" % know["wasted_over_staleness"],
+            "duplication fraction = min(cap, gain x wasted time / work)",
+            "  = %.4g   (cap %.2g, gain %.2g)"
+            % (r["duplication_fraction"], sc["dup_cap"], sc["dup_gain"]),
+            "knowledge fresh enough for a probe to be right %.3g of the "
+            "time:" % know["confidence"],
+            "  u / (1 + u) = 1 - %.3g, so u (1 + u) = (1 - %.3g) / %.3g^2 "
+            "= %.4g" % (know["confidence"], know["confidence"],
+                        know["confidence"],
+                        (1 - know["confidence"]) / know["confidence"] ** 2),
+        ] + ["  at %3.0f%% done: up to %.4g years old"
+             % (100 * float(mark), years)
+             for mark, years in know["fresh_enough_years"].items()
+             if not math.isinf(years)] + [
+            "  readings until 99%% are done = ln(100) / %.4g = %.4g"
+            % ((1 - know["confidence"]) / know["confidence"] ** 2,
+               know["readings_until_99_percent"]),
+        ]
     lines += [
-        "duplication fraction = min(cap, gain x (tau / region cycle)",
-        "                           x neighbors / regions per probe)",
-        "  = %.4g   (cap %.2g, gain %.2g, neighbors %d)"
-        % (r["duplication_fraction"], sc["dup_cap"], sc["dup_gain"],
-           sc["neighbors"]),
         "duplicated work = %.4g years" % ph["duplicated_work_years"],
         "",
         "scattering = allowed leg x margin / v",
@@ -3329,6 +3577,13 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--deposit-every", type=int, metavar="COUNT",
                    dest="deposit_every",
                    help="deposit records only after every Nth region")
+    g.add_argument("--confidence", type=float, metavar="FRACTION",
+                   help="how sure a probe must be that a system it takes "
+                        "for unsurveyed has not been surveyed by another "
+                        "probe meanwhile (default 0.95); the report says "
+                        "how fresh its knowledge of the others' work must "
+                        "be for that, where completion is recorded by "
+                        "system")
     g.add_argument("--bitrate", type=float, metavar="NUMBER",
                    dest="bitrate_bps",
                    help="optical link speed in bits per second at the "

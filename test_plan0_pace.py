@@ -1,6 +1,7 @@
 """Tests for plan0_pace.py. Run with: python -m unittest test_plan0_pace -v"""
 
 import contextlib
+import heapq
 import io
 import json
 import math
@@ -1775,8 +1776,13 @@ class TestStrategies(unittest.TestCase):
             plain["galaxy"]["mean_spacing_pc"])
         # They grow faster, by 9/4 against 3/2 over the whole survey, and
         # 2/3 x 9/4 = 3/2: the whole survey takes as long either way.
+        self.assertAlmostEqual(
+            plane["phases"]["survey_work_years"]
+            / plain["phases"]["survey_work_years"], 1.0, places=12)
+        # (the wasted visits differ in the eighth digit: they depend on
+        # when the work is done, not only on how much there is)
         self.assertAlmostEqual(plane["total_years"] / plain["total_years"],
-                               1.0, places=12)
+                               1.0, places=6)
         self.assertAlmostEqual(plane["hop_years_average"],
                                plain["hop_years_average"])
         self.assertGreater(plane["hop_thinning"], plain["hop_thinning"])
@@ -2234,6 +2240,342 @@ class TestStrategies(unittest.TestCase):
             u = pp.run_uncertainty(sc, pp.builtin_ranges(), draws=60)
             self.assertLess(u["percentiles_years"]["5"],
                             u["percentiles_years"]["95"])
+
+
+def simulate_stale_knowledge(age, stars=6000, probes=8, speed=0.03, seed=1,
+                             marks=(0.5, 0.8)):
+    """Several probes among drifting stars. Each goes to the nearest
+    system that it does not know to be done; it knows its own work at
+    once and the work of the others only `age` later. Arriving at a
+    system already done is a wasted visit, after which the probe takes
+    one of its eight nearest candidates at random (two probes at one
+    star would otherwise keep choosing the same target). Lengths are in
+    mean spacings, the probe speed is 1 and nothing is stayed at.
+    Returns the times at which the shares in `marks` are done and the
+    share of all visits that were wasted."""
+    rng = random.Random(seed)
+    side = stars ** (1.0 / 3.0)
+    start = [[rng.random() * side for _ in range(3)] for _ in range(stars)]
+    drift = [[rng.gauss(0.0, speed) for _ in range(3)] for _ in range(stars)]
+    where = [None] * stars
+    done_at = [math.inf] * stars
+    done_by = [-1] * stars
+    met = [set() for _ in range(probes)]        # found done on arrival
+    row = max(1, round(probes ** (1.0 / 3.0)))
+    at = [[(p % row + 0.5) * side / row, (p // row % row + 0.5) * side / row,
+           (p // (row * row) + 0.5) * side / math.ceil(probes / row ** 2)]
+          for p in range(probes)]
+    grid, cells, width, listed = {}, 1, side, list(range(stars))
+    rebuilt = -math.inf
+
+    def rebuild(now):
+        nonlocal grid, cells, width, listed, rebuilt
+        listed = [j for j in listed if done_at[j] > now - age]
+        cells = max(1, int(side / (3.0 * side ** 3 / max(1, len(listed)))
+                           ** (1.0 / 3.0)))
+        width = side / cells
+        grid = {}
+        for j in listed:
+            where[j] = spot = tuple((start[j][k] + drift[j][k] * now) % side
+                                    for k in range(3))
+            grid.setdefault(tuple(int(c / width) % cells for c in spot),
+                            []).append(j)
+        rebuilt = now
+
+    def nearest(p, now, count):
+        here = at[p]
+        home = [int(c / width) % cells for c in here]
+        found, reach = [], 0
+        while True:
+            span = range(-reach, reach + 1)
+            for dx in span:
+                for dy in span:
+                    for dz in span:
+                        if max(abs(dx), abs(dy), abs(dz)) != reach:
+                            continue
+                        for j in grid.get(((home[0] + dx) % cells,
+                                           (home[1] + dy) % cells,
+                                           (home[2] + dz) % cells), ()):
+                            if (done_by[j] == p or j in met[p]
+                                    or done_at[j] <= now - age):
+                                continue
+                            gap = 0.0
+                            for k in range(3):
+                                d = abs(where[j][k] - here[k])
+                                gap += min(d, side - d) ** 2
+                            found.append((gap, j))
+            if len(found) >= count and (
+                    sorted(found)[count - 1][0] <= (reach * width) ** 2):
+                return sorted(found)[:count]
+            reach += 1
+            if reach > cells // 2 + 1:
+                return sorted(set(found))[:count]
+
+    rebuild(0.0)
+    arrivals = []
+    for p in range(probes):
+        gap, j = nearest(p, 0.0, 1)[0]
+        heapq.heappush(arrivals, (math.sqrt(gap), p, j))
+    marks, times = list(marks), []
+    visits = wasted = finished = 0
+    while marks and arrivals:
+        now, p, j = heapq.heappop(arrivals)
+        if now - rebuilt > 0.25 / speed:
+            rebuild(now)
+        visits += 1
+        miss = done_at[j] <= now
+        if miss:
+            wasted += 1
+            met[p].add(j)
+        else:
+            done_at[j], done_by[j] = now, p
+            finished += 1
+        at[p] = list(where[j])
+        while marks and finished >= marks[0] * stars:
+            times.append(now)
+            marks.pop(0)
+        choice = nearest(p, now, 8 if miss else 1)
+        if choice:
+            gap, nxt = rng.choice(choice) if miss else choice[0]
+            heapq.heappush(arrivals, (now + math.sqrt(gap), p, nxt))
+    return times, wasted / visits
+
+
+class TestKnowledge(unittest.TestCase):
+    """How fresh a probe's knowledge of the others' work must be, and what
+    it costs when it is not, where completion is recorded by system."""
+
+    def test_the_ratio_solves_its_equation(self):
+        self.assertEqual(pp.unknown_done_ratio(0.0), 0.0)
+        for load in (1e-9, 1e-3, 0.0554, 1.0, 2.0, 1e4):
+            u = pp.unknown_done_ratio(load)
+            self.assertAlmostEqual(u * (1.0 + u) / load, 1.0, places=6)
+        self.assertAlmostEqual(pp.unknown_done_ratio(2.0), 1.0)
+        # Small loads: every stale system is one wasted visit.
+        self.assertAlmostEqual(pp.unknown_done_ratio(1e-6) / 1e-6, 1.0,
+                               places=5)
+
+    def test_law_against_a_direct_simulation(self):
+        stars, probes, age = 6000, 8, 100.0
+        fresh, wasted_fresh = simulate_stale_knowledge(0.0)
+        stale, wasted = simulate_stale_knowledge(age)
+        per_probe = stars / probes
+        # The hop constant of this run, from its first half (0.65).
+        hop = fresh[0] / (per_probe * 1.5 * (1.0 - 0.5 ** (2.0 / 3.0)))
+        self.assertAlmostEqual(hop, 0.65, delta=0.02)
+
+        def law(age, share, steps=4000):
+            total = 0.0
+            for i in range(steps):
+                left = 1.0 - (i + 0.5) / steps * share
+                system = hop * left ** (-1.0 / 3.0)
+                u = pp.unknown_done_ratio(
+                    (probes - 1.0) / probes * age
+                    / (per_probe * left * system))
+                total += per_probe * system * (1.0 + u) * share / steps
+            return total
+        for share, seen in zip((0.5, 0.8), stale):
+            self.assertAlmostEqual(law(age, share) / seen, 1.0, delta=0.035,
+                                   msg=share)
+        # With fresh knowledge hardly a visit is wasted; with knowledge
+        # 100 time units old, one in six, and the survey takes a fifth
+        # longer.
+        self.assertLess(wasted_fresh, 0.01)
+        self.assertAlmostEqual(wasted, 0.16, delta=0.03)
+        self.assertGreater(stale[1] / fresh[1], 1.15)
+
+    def test_wasted_time_integral(self):
+        # Where a system costs exp(x / 3) when exp(-x) of them are left,
+        # u (1 + u) = A exp(2 x / 3), and the integral of 1 / (1 + u) over
+        # x is 1.5 (ln(u / (1 + u)) - 1 / (1 + u)) between its ends.
+        def closed(u):
+            return 1.5 * (math.log(u / (1.0 + u)) - 1.0 / (1.0 + u))
+        for start, last in ((1e-6, 25.3), (2e-4, 25.3), (0.05, 13.8),
+                            (3.0, 20.0)):
+            got = pp.stale_knowledge(
+                1.0, lambda x: start * math.exp(2.0 * x / 3.0),
+                last)["wasted_over_delay"]
+            u0 = pp.unknown_done_ratio(start)
+            u1 = pp.unknown_done_ratio(start * math.exp(2.0 * last / 3.0))
+            self.assertAlmostEqual(got / (closed(u1) - closed(u0)), 1.0,
+                                   delta=0.01, msg=(start, last))
+        # Knowledge that is never out of date wastes nothing: the whole
+        # range counts in full, and the calculator multiplies it by zero.
+        self.assertAlmostEqual(pp.stale_knowledge(
+            0.0, lambda x: math.exp(x), 20.5)["wasted_over_delay"], 20.5)
+
+    def test_duplicated_work_follows_the_age_of_knowledge(self):
+        for name in pp.RECORDS_BY_SYSTEM:
+            r = pp.derive(pp.Scenario(strategy=name))
+            know = r["knowledge"]
+            parts = r["staleness_parts_years"]
+            # What the probe read is older by its own interval as well.
+            self.assertEqual(list(parts), [
+                "deposit_interval", "consolidation_cycle",
+                "light_between_points", "reading_interval"])
+            self.assertEqual(parts["reading_interval"],
+                             parts["deposit_interval"])
+            self.assertAlmostEqual(r["staleness_years"], sum(parts.values()))
+            self.assertAlmostEqual(
+                r["phases"]["duplicated_work_years"]
+                / (r["staleness_years"] * know["wasted_over_staleness"]),
+                1.0, places=9)
+            # Every wasted visit costs about one hop and one stay: over
+            # the survey a probe loses 14 times the age of its knowledge.
+            self.assertAlmostEqual(know["wasted_over_staleness"], 14.1,
+                                   delta=0.2)
+            self.assertAlmostEqual(r["duplication_fraction"], 0.0030,
+                                   delta=0.0002)
+        by = pp.derive(by_region())
+        self.assertIsNone(by["knowledge"])
+        self.assertNotIn("reading_interval", by["staleness_parts_years"])
+
+    def test_wasted_time_in_a_uniform_disc_without_stays(self):
+        sc = pp.Scenario(strategy="systems", galaxy_model="uniform",
+                         dwell_years=0.0)
+        r = pp.derive(sc)
+        self.assertAlmostEqual(r["mixing"]["share"], 1.0, places=6)
+        start = (0.9999 * r["staleness_years"]
+                 / (r["visited_per_probe"] * r["hop_years"]))
+        u0 = pp.unknown_done_ratio(start)
+        u1 = pp.unknown_done_ratio(start * 1e11 ** (2.0 / 3.0))
+
+        def closed(u):
+            return 1.5 * (math.log(u / (1.0 + u)) - 1.0 / (1.0 + u))
+        self.assertAlmostEqual(
+            r["knowledge"]["wasted_over_staleness"]
+            / (0.9999 * (closed(u1) - closed(u0))), 1.0, delta=0.01)
+
+    def test_how_fresh_knowledge_must_be(self):
+        r = pp.derive(pp.Scenario())
+        know = r["knowledge"]
+        self.assertEqual(know["confidence"], 0.95)
+        need = 0.05 / 0.95 ** 2
+        per_probe = r["visited_per_probe"]
+        stay = r["propellant"]["stay_years_per_system"]
+        for mark, growth in (("0.0", 1.0), ("0.5", r["hop_growth"]["0.5"]),
+                             ("0.9", r["hop_growth"]["0.9"])):
+            system = r["hop_years"] * growth + stay
+            self.assertAlmostEqual(
+                know["fresh_enough_years"][mark]
+                / (need * per_probe * (1.0 - float(mark)) * system / 0.9999),
+                1.0, places=9, msg=mark)
+        # 22, 17, 6.3 and 1.5 million years.
+        for mark, years in (("0.0", 2.21e7), ("0.5", 1.67e7),
+                            ("0.9", 6.28e6), ("0.99", 1.47e6)):
+            self.assertAlmostEqual(know["fresh_enough_years"][mark] / years,
+                                   1.0, delta=0.01, msg=mark)
+        self.assertAlmostEqual(know["readings_until_99_percent"],
+                               math.log(100.0) / need)
+        self.assertAlmostEqual(know["readings_until_99_percent"], 83.1,
+                               delta=0.1)
+        # The default layout delivers it within 159 thousand years: nine
+        # times fresher than needed at 99 percent.
+        self.assertAlmostEqual(r["staleness_years"] / 1.59e5, 1.0, delta=0.01)
+        self.assertAlmostEqual(know["sure_until_share"], 0.9997,
+                               delta=0.0001)
+        # Being surer asks for fresher knowledge, in proportion.
+        surer = pp.derive(pp.Scenario(confidence=0.99))["knowledge"]
+        self.assertAlmostEqual(
+            surer["fresh_enough_years"]["0.5"]
+            / know["fresh_enough_years"]["0.5"],
+            (0.01 / 0.99 ** 2) / need)
+        self.assertLess(surer["sure_until_share"], know["sure_until_share"])
+        # It changes what the report asks for, never the survey time.
+        self.assertEqual(
+            pp.derive(pp.Scenario(confidence=0.99))["total_years"],
+            r["total_years"])
+
+    def test_layouts_that_keep_knowledge_less_fresh(self):
+        shares, totals = [], []
+        for name in ("full-network", "stations-only", "sparse"):
+            r = pp.derive(pp.Scenario(archives=name))
+            shares.append(r["knowledge"]["sure_until_share"])
+            totals.append(r["phases"]["duplicated_work_years"])
+        self.assertEqual(shares, sorted(shares, reverse=True))
+        self.assertEqual(totals, sorted(totals))
+        self.assertAlmostEqual(shares[1], 0.99, delta=0.005)
+        self.assertAlmostEqual(shares[2], 0.87, delta=0.01)
+        none = pp.derive(pp.Scenario(archives="none"))
+        self.assertEqual(none["knowledge"]["sure_until_share"], 0.0)
+        self.assertEqual(none["duplication_fraction"], 0.5)
+        # Knowledge 15 million years old is too old from the first hop.
+        old = pp.derive(pp.Scenario(region_systems=1e5, deposit_every=2))
+        self.assertGreater(old["staleness_years"],
+                           old["knowledge"]["fresh_enough_years"]["0.0"])
+        self.assertEqual(old["knowledge"]["sure_until_share"], 0.0)
+        # A single probe has nobody's work to learn of.
+        alone = pp.derive(pp.Scenario(probes=1))
+        self.assertEqual(alone["duplication_fraction"], 0.0)
+        self.assertEqual(alone["knowledge"]["sure_until_share"], 1.0)
+        json.dumps(pp.json_safe(alone), allow_nan=False)
+        self.assertIn("A single probe has no other probe's work to learn of",
+                      " ".join(pp.render_report(alone).split()))
+
+    def test_fewer_larger_deposits_trade_side_trips_for_stale_knowledge(self):
+        # Side trips fall and wasted visits rise with the systems per
+        # deposit; the total is lowest in between.
+        runs = [pp.derive(pp.Scenario(region_systems=n))
+                for n in (100.0, 1000.0, 3000.0, 1e4, 1e5)]
+        trips = [r["phases"]["archive_detours_years"] for r in runs]
+        waste = [r["phases"]["duplicated_work_years"] for r in runs]
+        self.assertEqual(trips, sorted(trips, reverse=True))
+        self.assertEqual(waste, sorted(waste))
+        totals = [r["total_years"] for r in runs]
+        self.assertEqual(min(totals), totals[2])
+        self.assertGreater(totals[0] / min(totals), 1.07)
+        self.assertGreater(totals[4] / min(totals), 1.10)
+        # A box left in a surveyed system needs no side trip.
+        free = pp.derive(pp.Scenario(detour_kpc=0.0))
+        self.assertEqual(free["phases"]["archive_detours_years"], 0.0)
+
+    def test_report_and_inputs(self):
+        text = " ".join(pp.render_report(pp.derive(pp.Scenario())).split())
+        for phrase in ["what a probe knows of the work of the others is up "
+                       "to 159 thousand years old",
+                       "between readings of the archives",
+                       "For the probe to be right 95% of the time "
+                       "(--confidence)",
+                       "22 million years old at the start",
+                       "takes about 83 readings until 99% are done",
+                       "keeps it fresh enough until 99.97% of the systems "
+                       "are done"]:
+            self.assertIn(phrase, text)
+        regions = " ".join(pp.render_report(pp.derive(by_region())).split())
+        self.assertIn("completion facts are up to", regions)
+        self.assertNotIn("--confidence", regions)
+        sparse = " ".join(pp.render_report(pp.derive(pp.Scenario(
+            archives="sparse"))).split())
+        self.assertIn("keeps it fresh enough until 87% of the systems",
+                      sparse)
+        none = " ".join(pp.render_report(pp.derive(pp.Scenario(
+            archives="none"))).split())
+        self.assertIn("so it is never that sure", none)
+        explain = pp.render_explain(pp.derive(pp.Scenario()))
+        self.assertIn("u with u (1 + u) = tau x (probes - 1) / probes",
+                      explain)
+        self.assertIn("readings until 99% are done = ln(100) / 0.0554",
+                      explain)
+        self.assertEqual(pp.share_done(0.9997), "99.97%")
+        self.assertEqual(pp.share_done(0.999), "99.9%")
+        self.assertEqual(pp.share_done(0.99), "99.0%")
+        self.assertEqual(pp.share_done(0.87), "87%")
+        for bad in (0.0, 1.0, -0.1, 1.5):
+            with self.assertRaises(ValueError):
+                pp.derive(pp.Scenario(confidence=bad))
+        # Each of the two inputs is reported where it cannot matter.
+        self.assertEqual(
+            [item["input"] for item in pp.derive(by_region(
+                confidence=0.9))["unused_inputs"]], ["confidence"])
+        self.assertEqual(
+            [item["input"] for item in pp.derive(pp.Scenario(
+                neighbors=4))["unused_inputs"]], ["neighbors"])
+        self.assertEqual(pp.derive(by_region(neighbors=4))["unused_inputs"],
+                         [])
+        self.assertEqual(pp.derive(pp.Scenario(
+            confidence=0.9))["unused_inputs"], [])
+        args = pp.build_parser().parse_args(["--confidence", "0.9"])
+        self.assertEqual(pp.scenario_from_args(args).confidence, 0.9)
 
 
 class TestLeftOut(unittest.TestCase):
