@@ -250,7 +250,9 @@ class Scenario:
     standard galactic-astronomy values."""
 
     probes: int = 10_000                 # Physical Layer section 1
-    speed_c: float = 0.05                # fraction of light speed; section 1
+    # Fraction of light speed. The plan asks for at least 0.1; Physical
+    # Layer section 1 names 0.05 as nominal.
+    speed_c: float = 0.1
     # Workload. The system count is authoritative; densities and the
     # distances between systems follow from it through the galaxy model.
     # None means DEFAULT_SYSTEMS (or density x volume if a density is given).
@@ -454,9 +456,10 @@ def resolve_layout(sc: Scenario) -> dict:
 INPUT_TABLE = [
     ("probes", None, None, None, False,
      "the plan (Physical Layer section 1)"),
-    ("speed_c", 0.05, 0.2, "log", True,
-     "nominal speed and the span of studied probe concepts (Physical "
-     "Layer sections 1 and 5)"),
+    ("speed_c", 0.1, 0.2, "log", True,
+     "the plan: at least 0.1 of light speed, up to the fastest of the "
+     "studied probe concepts (Physical Layer section 5). Physical Layer "
+     "section 1 names 0.05 as nominal: --speed 0.05"),
     ("systems", 5e10, 1.2e11, "log", True,
      "stellar mass of the galaxy, 2.6e10 to 6.1e10 solar masses (Lian and "
      "others 2025; Licquia and Newman 2015), over 0.54 solar masses per "
@@ -3155,7 +3158,7 @@ how sure the answer is (--uncertainty, or "ranges" in a scenario file):
   by a table of what each input does on its own. The draws are seeded,
   so a run can be repeated exactly. A scenario file can set its own
   ranges, which also switches this mode on:
-      {"speed_c": 0.05,
+      {"speed_c": 0.15,
        "ranges": {"systems": [5e10, 1.2e11],
                   "dwell_years": {"low": 1, "high": 1000, "scale": "log"}}}
   Mapping an input to null inside "ranges" leaves it fixed.
@@ -3164,7 +3167,7 @@ how sure the answer is (--uncertainty, or "ranges" in a scenario file):
 examples:
   python plan0_pace.py
       the default scenario: every star system, doctrine archive network
-  python plan0_pace.py --archives stations-only --depth 0.1 --speed 0.1
+  python plan0_pace.py --archives stations-only --depth 0.1 --speed 0.2
       visit one system in ten, at double cruise speed, with staffed
       archive stations only
   python plan0_pace.py --explain
@@ -3198,7 +3201,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="number of probes in the fleet (default 10000)")
     g.add_argument("--speed", type=float, metavar="FRACTION", dest="speed_c",
                    help="cruise speed as a fraction of the speed of light "
-                        "(default 0.05; studied concepts span 0.05 to 0.2)")
+                        "(default 0.1; studied concepts span 0.05 to 0.2)")
     g.add_argument("--systems", type=float, metavar="COUNT",
                    help="total star systems in the galaxy; this count is "
                         "the input from which the densities and the "

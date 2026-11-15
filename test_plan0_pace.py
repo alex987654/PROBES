@@ -71,20 +71,25 @@ class TestModel(unittest.TestCase):
     def test_default_headline_in_sane_range(self):
         # A coarse tripwire only; the identities are pinned elsewhere.
         # The band moves whenever a default moves, on purpose. It is now
-        # centered on 1.4 billion years: 1e11 systems in an exponential
-        # disc with a bulge, completion recorded by system. That is every
-        # system, where the 1.1 billion years of one pass by regions
-        # reached 63 percent of them. Hops are 0.65 mean spacings at
-        # first instead of 0.78 and 1.5 times that on average, because
-        # the systems still to do thin out: 1.25 times the travel.
+        # centered on 0.75 billion years: 1e11 systems in an exponential
+        # disc with a bulge, completion recorded by system, at 0.1 of
+        # light speed. The cruise speed is what moved it, from 0.05: the
+        # plan asks for at least 0.1. Twice the speed is not half the
+        # time (1.40 billion years before), because the stay of 10 years
+        # per system does not shrink: 74 years per system against 138.
         r = pp.derive(pp.Scenario())
         self.assertEqual(r["strategy"], "systems-midplane")
-        self.assertGreater(r["total_years"], 1.2e9)
-        self.assertLess(r["total_years"], 1.6e9)
+        self.assertEqual(r["scenario"]["speed_c"], 0.1)
+        self.assertGreater(r["total_years"], 0.65e9)
+        self.assertLess(r["total_years"], 0.85e9)
         # The specification as it stands: one pass by regions.
         by_region = pp.derive(pp.Scenario(strategy="regions"))
-        self.assertGreater(by_region["total_years"], 0.9e9)
-        self.assertLess(by_region["total_years"], 1.4e9)
+        self.assertGreater(by_region["total_years"], 0.5e9)
+        self.assertLess(by_region["total_years"], 0.75e9)
+        # At the nominal speed of Physical Layer section 1.
+        slow = pp.derive(pp.Scenario(speed_c=0.05))
+        self.assertAlmostEqual(slow["total_years"] / 1.401e9, 1.0,
+                               delta=0.005)
 
     def test_regime_table_cross_checks(self):
         # Physical Layer section 1: 0.27 kiloparsecs at 0.05 c takes about
@@ -211,7 +216,7 @@ class TestIdentities(unittest.TestCase):
     AUDITED = dict(systems=2e11, stellar_density=0.1, path_factor=1.0,
                    dispersal_leg_kpc=10.0, envelope_factor=1.5,
                    consolidation_years=1e4, cache_spacing_kpc=0.27,
-                   strategy="regions")
+                   strategy="regions", speed_c=0.05)
 
     def test_headline_from_first_principles(self):
         sc = pp.Scenario(**self.AUDITED)
@@ -353,7 +358,7 @@ class TestIdentities(unittest.TestCase):
         base = pp.derive(pp.Scenario())
         needed = base["total_years"] - base["phases"]["dispersal_years"]
         dispersal = base["phases"]["dispersal_years"]
-        for rate in (1e-9, 1e-8):
+        for rate in (2e-9, 1e-8):
             r = pp.derive(pp.Scenario(attrition_per_year=rate))
             self.assertTrue(r["fleet_exhausted"])
             # Everything the fleet will ever do: integrate far past the
@@ -928,8 +933,9 @@ class TestFleetGeometry(unittest.TestCase):
     def test_default_fleet_matches_the_regime_table(self):
         # Physical Layer section 1: about 0.07 square kiloparsecs per
         # probe, 0.27 kiloparsecs spacing, 880 years of light time,
-        # 1.8e4 years of probe transit, 1e5 years to cross the fleet.
-        g = pp.derive(pp.Scenario())["geometry"]
+        # 1.8e4 years of probe transit at its nominal 0.05 of light
+        # speed, 1e5 years to cross the fleet.
+        g = pp.derive(pp.Scenario(speed_c=0.05))["geometry"]
         self.assertAlmostEqual(g["area_per_probe_kpc2"], 0.07, delta=0.001)
         self.assertAlmostEqual(g["spacing_kpc"], 0.27, delta=0.005)
         self.assertAlmostEqual(g["light_years_per_spacing"] / 880, 1.0,
@@ -938,6 +944,10 @@ class TestFleetGeometry(unittest.TestCase):
                                delta=0.04)
         self.assertAlmostEqual(g["crossing_light_years"] / 1e5, 1.0,
                                delta=0.03)
+        # At the speed of the plan a transit takes half as long.
+        plan = pp.derive(pp.Scenario())["geometry"]
+        self.assertAlmostEqual(plan["transit_years_per_spacing"] / 8.7e3,
+                               1.0, delta=0.01)
 
     def test_identities(self):
         sc = pp.Scenario(probes=2500, disc_radius_kpc=12.0, speed_c=0.08)
@@ -961,7 +971,7 @@ class TestFleetGeometry(unittest.TestCase):
         base = pp.derive(pp.Scenario())["geometry"]
         more = pp.derive(pp.Scenario(probes=40_000))["geometry"]
         wide = pp.derive(pp.Scenario(disc_radius_kpc=30.0))["geometry"]
-        fast = pp.derive(pp.Scenario(speed_c=0.1))["geometry"]
+        fast = pp.derive(pp.Scenario(speed_c=0.2))["geometry"]
         self.assertAlmostEqual(more["spacing_kpc"], base["spacing_kpc"] / 2)
         self.assertAlmostEqual(wide["spacing_kpc"], base["spacing_kpc"] * 2)
         self.assertAlmostEqual(fast["transit_years_per_spacing"],
@@ -980,12 +990,13 @@ class TestFleetGeometry(unittest.TestCase):
         self.assertAlmostEqual(
             low, 10_000.0 / g["transit_years_per_spacing"])
         self.assertAlmostEqual(high, 2 * low)
-        self.assertEqual(g["useful_relay_hops"], [1, 2])
+        self.assertEqual(g["useful_relay_hops"], [2, 3])
         self.assertEqual(g["spec_hop_limit"], 2)
-        fast = pp.derive(pp.Scenario(speed_c=0.1))["geometry"]
-        self.assertEqual(fast["useful_relay_hops"], [2, 3])
-        slow_cycle = pp.derive(
-            pp.Scenario(consolidation_years=40_000.0))["geometry"]
+        # At the nominal speed of Physical Layer section 1.
+        slow = pp.derive(pp.Scenario(speed_c=0.05))["geometry"]
+        self.assertEqual(slow["useful_relay_hops"], [1, 2])
+        slow_cycle = pp.derive(pp.Scenario(
+            speed_c=0.05, consolidation_years=40_000.0))["geometry"]
         self.assertEqual(slow_cycle["useful_relay_hops"], [3, 5])
 
     def test_station_layouts_follow_the_probe_spacing(self):
@@ -1078,7 +1089,7 @@ class TestStopAndGo(unittest.TestCase):
         self.assertLess(math.sqrt(slow * d), v)
 
     def test_uniform_disc_is_one_leg(self):
-        kwargs = dict(stellar_density=0.1, path_factor=1.0)
+        kwargs = dict(stellar_density=0.1, path_factor=1.0, speed_c=0.05)
         r = pp.derive(by_region(acceleration_m_s2=0.1, **kwargs))
         self.assertAlmostEqual(
             r["hop_years"],
@@ -1136,11 +1147,11 @@ class TestStopAndGo(unittest.TestCase):
     def test_numerical_average_matches_sampled_systems(self):
         # Weak engines: many hops never reach cruise speed. Compare with
         # hops drawn from the density field itself.
-        sc = by_region(acceleration_m_s2=0.004)
+        sc = by_region(acceleration_m_s2=0.016)
         r = pp.derive(sc)
         gal = r["galaxy"]
         v = sc.speed_c * pp.C_M_PER_S
-        ramp_m = v * v / 0.004
+        ramp_m = v * v / 0.016
         rng = random.Random(21)
         xm = gal["disc_radius_pc"] / gal["scale_length_pc"]
         total = reach = 0.0
@@ -1157,7 +1168,7 @@ class TestStopAndGo(unittest.TestCase):
                 density = gal["disc_central_density"] * math.exp(
                     -x + math.log(rng.random()))
             d = sc.path_factor * density ** (-1.0 / 3.0) * pp.PARSEC_M
-            total += pp.leg_seconds(d, v, 0.004)
+            total += pp.leg_seconds(d, v, 0.016)
             reach += d >= ramp_m
         self.assertAlmostEqual(
             total / count / pp.YEAR_S / r["hop_years"], 1.0, delta=0.02)
@@ -1294,8 +1305,9 @@ class TestSystemsReached(unittest.TestCase):
         survey = r["total_years"] - r["phases"]["dispersal_years"]
         self.assertAlmostEqual(reached["region_changes_per_pass"][0],
                                survey / slow)
-        self.assertGreater(min(reached["region_changes_per_pass"]), 1000)
-        self.assertLess(max(reached["region_changes_per_pass"]), 5000)
+        # 630 to 1,900 times at 0.1 of light speed
+        self.assertGreater(min(reached["region_changes_per_pass"]), 500)
+        self.assertLess(max(reached["region_changes_per_pass"]), 2500)
         self.assertAlmostEqual(reached["seen_after_one_pass"],
                                1 - math.exp(-1), places=9)
         self.assertAlmostEqual(reached["repeat_visit_share"], math.exp(-1),
@@ -1309,8 +1321,8 @@ class TestSystemsReached(unittest.TestCase):
             self.assertAlmostEqual(
                 row["years"] / (r["phases"]["dispersal_years"]
                                 + passes * survey), 1.0, places=6)
-        # 99 percent of the systems: 4.6 passes, 5.3 billion years.
-        self.assertAlmostEqual(reached["rows"][2]["years"] / 5.26e9, 1.0,
+        # 99 percent of the systems: 4.6 passes, 2.9 billion years.
+        self.assertAlmostEqual(reached["rows"][2]["years"] / 2.86e9, 1.0,
                                delta=0.01)
 
     def test_a_short_survey_is_not_affected(self):
@@ -1336,14 +1348,14 @@ class TestSystemsReached(unittest.TestCase):
                        "one pass over every region reaches 63% of the "
                        "systems, and 37% of its visits go to systems "
                        "already seen",
-                       "99% 4.6 5.3 billion years",
-                       "90% 2.3 2.6 billion years",
-                       "50% 0.69 790 million years",
+                       "99% 4.6 2.9 billion years",
+                       "90% 2.3 1.4 billion years",
+                       "50% 0.69 430 million years",
                        "the fleet stops after one pass"]:
             self.assertIn(phrase, text)
 
     def test_losses_can_put_further_passes_out_of_reach(self):
-        r = pp.derive(by_region(attrition_per_year=5e-10))
+        r = pp.derive(by_region(attrition_per_year=1e-9))
         self.assertFalse(r["fleet_exhausted"])           # one pass is done
         rows = r["reached"]["rows"]
         self.assertIsNotNone(rows[0]["years"])           # 0.69 passes
@@ -1643,7 +1655,7 @@ class TestStrategies(unittest.TestCase):
         base = pp.derive(pp.Scenario(strategy="regions"))
         r = pp.derive(pp.Scenario(strategy="systems"))
         first = base["hop_years"] * 0.65 / 0.78
-        self.assertEqual(r["hop_thinning"], 1.5)
+        self.assertAlmostEqual(r["hop_thinning"], 1.5, places=9)
         self.assertEqual(base["hop_thinning"], 1.0)
         self.assertAlmostEqual(r["hop_years"], first)          # first hops
         self.assertAlmostEqual(r["hop_years_average"], 1.5 * first)
@@ -1662,11 +1674,23 @@ class TestStrategies(unittest.TestCase):
         # Speeding up and slowing down is not stretched, only the cruise.
         slow = pp.derive(pp.Scenario(strategy="systems",
                                      acceleration_m_s2=0.05))
-        ramp = slow["kinematics"]["ramp_years"]
         cruise = slow["hop_parsec"] * pp.PARSEC_M / slow["speed_m_per_s"] \
             / pp.YEAR_S
+        ramp = slow["hop_years"] - cruise           # on the first hops
+        self.assertGreater(ramp, 0.0)
         self.assertAlmostEqual(slow["hop_years_average"],
                                1.5 * cruise + ramp)
+        # Where nearly every hop reaches cruise speed, that is the full
+        # time to speed up and slow down.
+        self.assertLess(slow["kinematics"]["hops_reaching_cruise"], 0.99)
+        strong = pp.derive(pp.Scenario(strategy="systems",
+                                       acceleration_m_s2=1.0))
+        self.assertGreater(strong["kinematics"]["hops_reaching_cruise"],
+                           0.999)
+        self.assertAlmostEqual(
+            (strong["hop_years"] - strong["hop_parsec"] * pp.PARSEC_M
+             / strong["speed_m_per_s"] / pp.YEAR_S)
+            / strong["kinematics"]["ramp_years"], 1.0, delta=0.001)
 
     def test_milestones_by_system_follow_the_thinning_law(self):
         def check(sc, path):
@@ -1894,8 +1918,10 @@ class TestStrategies(unittest.TestCase):
     def test_default_fleet_is_fully_mixed(self):
         for name in pp.RECORDS_BY_SYSTEM:
             r = pp.derive(pp.Scenario(strategy=name))
-            self.assertAlmostEqual(r["mixing"]["crossings"], 53, delta=1)
-            self.assertEqual(r["mixing"]["share"], 1.0)
+            self.assertAlmostEqual(r["mixing"]["crossings"], 29, delta=1)
+            self.assertAlmostEqual(r["mixing"]["share"], 1.0, places=9)
+            slow = pp.derive(pp.Scenario(strategy=name, speed_c=0.05))
+            self.assertAlmostEqual(slow["mixing"]["crossings"], 53, delta=1)
         for name in ("regions", "sweep-line"):
             r = pp.derive(pp.Scenario(strategy=name))
             self.assertIsNone(r["mixing"])
@@ -1961,12 +1987,15 @@ class TestStrategies(unittest.TestCase):
         self.assertAlmostEqual(wait["swing_years"], 7 * 350 * pp.PARSEC_M
                                / 2.0e4 / pp.YEAR_S)
         self.assertAlmostEqual(wait["swing_years"] / 1.2e8, 1.0, delta=0.01)
-        self.assertAlmostEqual(wait["swings"], 9.4, delta=0.1)
+        self.assertAlmostEqual(wait["swings"], 5.1, delta=0.1)
+        self.assertAlmostEqual(pp.derive(pp.Scenario(
+            strategy="systems-midplane", speed_c=0.05))
+            ["plane_wait"]["swings"], 9.4, delta=0.1)
         self.assertEqual(r["galaxy"]["parts"][0]["kind"], "disc-plane")
         self.assertIsNone(
             pp.derive(pp.Scenario(strategy="systems"))["plane_wait"])
-        # Ten times the fleet: the survey lasts one swing, and the probes
-        # go to the systems instead.
+        # Ten times the fleet: the survey lasts half a swing, and the
+        # probes go to the systems instead.
         short = pp.derive(pp.Scenario(strategy="systems-midplane",
                                       probes=100_000))
         plain = pp.derive(pp.Scenario(strategy="systems", probes=100_000))
@@ -2035,8 +2064,8 @@ class TestStrategies(unittest.TestCase):
                                line["capacity_per_year"] / crossings)
         self.assertAlmostEqual(
             line["probes_to_staff_all"] * line["staffed_share"], sc.probes)
-        # Far more systems cross than the fleet can survey.
-        self.assertGreater(1 / line["staffed_share"], 10)
+        # Far more systems cross than the fleet can survey: nine times.
+        self.assertAlmostEqual(1 / line["staffed_share"], 9.0, delta=0.1)
         self.assertAlmostEqual(line["rim_turn_years"] / 4.0e8, 1.0,
                                delta=0.01)
         # A uniform disc has no bulge: every system is on the line.
@@ -2171,17 +2200,17 @@ class TestStrategies(unittest.TestCase):
     def test_ranking_for_the_default_fleet(self):
         rows = {row["strategy"]: row
                 for row in pp.derive(pp.Scenario())["strategies"]}
-        # 5.3, 3.9, 1.3 and 1.3 billion years: recording by system is
+        # 2.9, 1.9, 0.71 and 0.71 billion years: recording by system is
         # what counts, not where the probes wait.
-        for name, expected in (("regions", 5.26e9), ("sweep-line", 3.93e9),
-                               ("systems", 1.318e9),
-                               ("systems-midplane", 1.318e9)):
+        for name, expected in (("regions", 2.86e9), ("sweep-line", 1.924e9),
+                               ("systems", 7.084e8),
+                               ("systems-midplane", 7.084e8)):
             self.assertAlmostEqual(rows[name]["years_to_99_percent"]
                                    / expected, 1.0, delta=0.01, msg=name)
         self.assertAlmostEqual(rows["regions"]["seen_after_one_pass"], 0.632,
                                delta=0.001)
         self.assertAlmostEqual(rows["sweep-line"]["seen_after_one_pass"],
-                               0.75, delta=0.01)
+                               0.80, delta=0.01)
 
     def test_headline_says_what_it_covers(self):
         def block(name):
@@ -2191,7 +2220,7 @@ class TestStrategies(unittest.TestCase):
             return " ".join(x.strip() for x in lines[at:lines.index("", at)])
         self.assertIn("one pass over every region", block("regions"))
         self.assertIn("one sweep of the line", block("sweep-line"))
-        self.assertIn("reaches about 75% of the systems", block("sweep-line"))
+        self.assertIn("reaches about 80% of the systems", block("sweep-line"))
         for name in pp.RECORDS_BY_SYSTEM:
             self.assertNotIn("reaches about", block(name))
         report = pp.render_report(pp.derive(pp.Scenario(strategy="systems")))
@@ -2429,7 +2458,7 @@ class TestPropellant(unittest.TestCase):
     def test_velocity_change_adds_up_over_the_survey(self):
         # The audited fleet: 2e7 systems per probe at 0.05 of light
         # speed is two million times light speed per probe.
-        r = pp.derive(pp.Scenario(systems=2e11))
+        r = pp.derive(pp.Scenario(systems=2e11, speed_c=0.05))
         p = r["propellant"]
         self.assertAlmostEqual(p["velocity_change_per_stop_c"], 0.1)
         self.assertAlmostEqual(p["velocity_change_per_probe_c"], 2e6)
@@ -2501,7 +2530,7 @@ class TestScattering(unittest.TestCase):
     for every starting point, so it cannot encode one."""
 
     def test_default_allowance_is_the_disc_diameter(self):
-        for kwargs in [dict(), dict(disc_radius_kpc=20.0, speed_c=0.1)]:
+        for kwargs in [dict(), dict(disc_radius_kpc=20.0, speed_c=0.05)]:
             sc = pp.Scenario(**kwargs)
             r = pp.derive(sc)
             diameter_m = 2 * sc.disc_radius_kpc * pp.KPC_M
@@ -2511,9 +2540,9 @@ class TestScattering(unittest.TestCase):
                 1.0, places=12)
             self.assertTrue(r["dispersal"]["covers_any_start"])
             self.assertEqual(r["distance"]["dispersal_m"], diameter_m)
-        # 30 kiloparsecs at 0.05 of light speed: 1.96 million years.
+        # 30 kiloparsecs at 0.1 of light speed: 978 thousand years.
         self.assertAlmostEqual(
-            pp.derive(pp.Scenario())["phases"]["dispersal_years"] / 1.957e6,
+            pp.derive(pp.Scenario())["phases"]["dispersal_years"] / 9.785e5,
             1.0, places=3)
 
     def test_it_covers_the_longest_leg_from_any_starting_radius(self):
@@ -2537,7 +2566,7 @@ class TestScattering(unittest.TestCase):
 
     def test_explicit_leg_and_margin_keep_working(self):
         r = pp.derive(pp.Scenario(dispersal_leg_kpc=10.0,
-                                  envelope_factor=1.5))
+                                  envelope_factor=1.5, speed_c=0.05))
         # The figure the audit reproduced: 978 thousand years.
         self.assertAlmostEqual(r["phases"]["dispersal_years"] / 9.785e5, 1.0,
                                places=3)
