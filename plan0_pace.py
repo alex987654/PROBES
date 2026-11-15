@@ -96,6 +96,40 @@ ARCHIVE_PRESETS = {
 # Scenario
 # ---------------------------------------------------------------------------
 
+# Allowed range of every numeric input:
+#   name: (lowest value, lowest allowed itself?, highest value or None,
+#          highest allowed itself?)
+_NUMBER_RULES = {
+    "probes": (1, True, None, False),
+    "speed_c": (0, False, 1, False),
+    "systems": (0, False, None, False),
+    "stellar_density": (0, False, None, False),
+    "disc_radius_kpc": (0, False, None, False),
+    "disc_thickness_kpc": (0, False, None, False),
+    "depth": (0, False, 1, True),
+    "dwell_years": (0, True, None, False),
+    "path_factor": (0, False, None, False),
+    "region_systems": (0, False, None, False),
+    "dispersal_leg_kpc": (0, True, None, False),
+    "envelope_factor": (0, False, None, False),
+    "bitrate_bps": (0, False, None, False),
+    "message_bytes": (0, False, None, False),
+    "cache_spacing_kpc": (0, False, None, False),
+    "detour_kpc": (0, True, None, False),
+    "station_count": (1, True, None, False),
+    "consolidation_years": (0, False, None, False),
+    "deposit_every": (1, True, None, False),
+    "attrition_per_year": (0, True, None, False),
+    "dup_cap": (0, True, None, False),
+    "dup_gain": (0, True, None, False),
+    "neighbors": (0, True, None, False),
+}
+_WHOLE_NUMBER_FIELDS = ("probes", "station_count", "deposit_every",
+                        "neighbors")
+# Inputs that may be left unset (the layout preset or the model fills in).
+_OPTIONAL_FIELDS = ("cache_spacing_kpc", "detour_kpc", "station_count",
+                    "deposit_every")
+
 
 @dataclass
 class Scenario:
@@ -128,8 +162,17 @@ class Scenario:
     dup_gain: float = 1.0                # tuning gain on duplication model
     neighbors: int = 6                   # planar node degree; section 4.3
 
+    def __post_init__(self) -> None:
+        # A scenario file may spell a whole number as 10000.0; accept that.
+        for name in _WHOLE_NUMBER_FIELDS:
+            value = getattr(self, name)
+            if isinstance(value, float) and value.is_integer():
+                setattr(self, name, int(value))
+
     @classmethod
     def from_dict(cls, data: dict) -> "Scenario":
+        if not isinstance(data, dict):
+            raise ValueError("a scenario must be one object of named values")
         valid = {f.name for f in fields(cls)}
         unknown = set(data) - valid
         if unknown:
@@ -139,20 +182,35 @@ class Scenario:
         return cls(**data)
 
     def validate(self) -> None:
-        positive = ["probes", "speed_c", "systems", "stellar_density",
-                    "disc_radius_kpc", "disc_thickness_kpc", "depth",
-                    "path_factor", "region_systems", "envelope_factor",
-                    "bitrate_bps", "message_bytes", "consolidation_years"]
-        for name in positive:
-            if getattr(self, name) <= 0:
-                raise ValueError("%s must be positive" % name)
-        if not 0 < self.depth <= 1:
-            raise ValueError("depth must be in (0, 1]")
-        if not 0 <= self.speed_c < 1:
-            raise ValueError("speed_c must be below 1 (light speed)")
-        if self.dwell_years < 0 or self.attrition_per_year < 0:
-            raise ValueError("dwell_years and attrition_per_year must be >= 0")
-        if self.archives not in ARCHIVE_PRESETS:
+        """Reject any value the model cannot use, naming the input."""
+        for name, (low, low_ok, high, high_ok) in _NUMBER_RULES.items():
+            value = getattr(self, name)
+            if value is None:
+                if name in _OPTIONAL_FIELDS:
+                    continue
+                raise ValueError("%s needs a value" % name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError("%s must be a number (got %r)"
+                                 % (name, value))
+            if not math.isfinite(value):
+                raise ValueError("%s must be a finite number (got %r)"
+                                 % (name, value))
+            if name in _WHOLE_NUMBER_FIELDS and not isinstance(value, int):
+                raise ValueError("%s must be a whole number (got %r)"
+                                 % (name, value))
+            if value < low or (value == low and not low_ok):
+                raise ValueError(
+                    "%s must be %s %g (got %r)"
+                    % (name, "at least" if low_ok else "greater than",
+                       low, value))
+            if high is not None and (value > high
+                                     or (value == high and not high_ok)):
+                raise ValueError(
+                    "%s must be %s %g%s (got %r)"
+                    % (name, "at most" if high_ok else "below", high,
+                       " (light speed)" if name == "speed_c" else "", value))
+        if (not isinstance(self.archives, str)
+                or self.archives not in ARCHIVE_PRESETS):
             raise ValueError("unknown archive layout %r (choices: %s)"
                              % (self.archives,
                                 ", ".join(sorted(ARCHIVE_PRESETS))))
@@ -718,7 +776,11 @@ def scenario_from_args(args: argparse.Namespace) -> Scenario:
     data = {}
     if args.scenario:
         with open(args.scenario, "r", encoding="utf-8") as fh:
-            data.update(json.load(fh))
+            loaded = json.load(fh)
+        if not isinstance(loaded, dict):
+            raise ValueError("the scenario file must hold one object of "
+                             "named values, not %s" % type(loaded).__name__)
+        data.update(loaded)
     for f in fields(Scenario):
         value = getattr(args, f.name, None)
         if value is not None:
@@ -743,8 +805,10 @@ def main(argv=None) -> int:
     try:
         sc = scenario_from_args(args)
         result = derive(sc)
-    except (ValueError, OSError, json.JSONDecodeError) as exc:
-        print("error: %s" % exc, file=sys.stderr)
+    except (ValueError, OSError, ArithmeticError) as exc:
+        # json.JSONDecodeError is a ValueError; ArithmeticError covers a
+        # division by zero or overflow from inputs at the edge of range.
+        print("error: %s" % (exc or type(exc).__name__), file=sys.stderr)
         return 2
     if args.explain:
         print(render_explain(result))

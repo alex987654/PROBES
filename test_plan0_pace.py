@@ -107,6 +107,81 @@ class TestModel(unittest.TestCase):
                 pp.derive(pp.Scenario(**bad))
 
 
+class TestInputValidation(unittest.TestCase):
+    """Every input the model reads is checked before use (audit A2-A4)."""
+
+    def run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = pp.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def assert_rejected(self, argv, mention):
+        code, out, err = self.run_main(argv)
+        self.assertEqual(code, 2, argv)
+        self.assertIn("error:", err)
+        self.assertIn(mention, err)
+        self.assertEqual(out, "", "no report may be printed for %r" % argv)
+
+    def test_deposit_every_below_one_rejected(self):
+        self.assert_rejected(["--deposit-every", "0"], "deposit_every")
+        self.assert_rejected(["--deposit-every", "-2"], "deposit_every")
+        with self.assertRaises(ValueError):
+            pp.derive(pp.Scenario(deposit_every=0))
+
+    def test_station_count_below_one_rejected(self):
+        # Zero used to end in an uncaught ZeroDivisionError, a negative
+        # count in a bare "math domain error".
+        self.assert_rejected(["--station-count", "0"], "station_count")
+        self.assert_rejected(["--station-count", "-3"], "station_count")
+
+    def test_negative_tuning_and_distance_inputs_rejected(self):
+        for bad in [dict(dup_gain=-5), dict(dup_cap=-0.1),
+                    dict(neighbors=-1), dict(dispersal_leg_kpc=-1),
+                    dict(cache_spacing_kpc=0), dict(cache_spacing_kpc=-2),
+                    dict(detour_kpc=-0.5), dict(dwell_years=-1),
+                    dict(attrition_per_year=-1e-9)]:
+            with self.assertRaises(ValueError, msg=bad):
+                pp.derive(pp.Scenario(**bad))
+        self.assert_rejected(["--dup-gain", "-5"], "dup_gain")
+
+    def test_zero_is_accepted_where_it_has_a_meaning(self):
+        for fine in [dict(dup_gain=0), dict(dup_cap=0), dict(neighbors=0),
+                     dict(detour_kpc=0), dict(dwell_years=0)]:
+            r = pp.derive(pp.Scenario(**fine))
+            self.assertGreater(r["total_years"], 0, fine)
+        self.assertEqual(
+            pp.derive(pp.Scenario(dup_gain=0))["duplication_fraction"], 0)
+
+    def test_values_that_are_not_finite_numbers_rejected(self):
+        for flag in ["--speed", "--dwell", "--systems", "--dup-gain"]:
+            for word in ["nan", "inf", "-inf"]:
+                # "=" keeps a leading minus sign from reading as a flag.
+                code, _, err = self.run_main(["%s=%s" % (flag, word)])
+                self.assertEqual(code, 2, (flag, word))
+                self.assertIn("error:", err)
+        for bad in [dict(probes="many"), dict(probes=True),
+                    dict(probes=10.5), dict(speed_c=None),
+                    dict(archives=["full-network"])]:
+            with self.assertRaises(ValueError, msg=bad):
+                pp.derive(pp.Scenario(**bad))
+
+    def test_whole_number_written_as_float_accepted(self):
+        self.assertEqual(pp.Scenario(probes=10000.0).probes, 10000)
+        self.assertEqual(pp.derive(pp.Scenario(probes=10000.0))["total_years"],
+                         pp.derive(pp.Scenario())["total_years"])
+
+    def test_scenario_file_must_hold_an_object(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "list.json")
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump([1, 2, 3], fh)
+            self.assert_rejected(["--scenario", path], "one object")
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump({"probes": "many"}, fh)
+            self.assert_rejected(["--scenario", path], "probes")
+
+
 class TestHelpText(unittest.TestCase):
     # The manual must stay free of bare acronyms and specification
     # shorthand (matching the readability rule of Amendment Record
