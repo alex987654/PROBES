@@ -673,6 +673,21 @@ class TestCommandLine(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("HEADLINE", out)
 
+    def test_scale_estimate_is_stated_at_the_headline(self):
+        # Audit A8: the warning used to sit only under "Caveats", far
+        # below a headline thirty times past its limit.
+        code, out = self.run_main([])
+        lines = out.splitlines()
+        at = next(i for i, line in enumerate(lines) if "HEADLINE" in line)
+        self.assertIn("scale estimate", lines[at + 1])
+        self.assertLess(at + 1, lines.index("Phase breakdown"))
+        self.assertTrue(pp.derive(pp.Scenario())["scale_estimate"])
+        # A survey shorter than the limit carries no such label.
+        short = pp.derive(pp.Scenario(systems=1e8))
+        self.assertLess(short["total_years"], pp.SCALE_ESTIMATE_YEARS)
+        self.assertFalse(short["scale_estimate"])
+        self.assertNotIn("scale estimate only", pp.render_report(short))
+
     def test_explain_run(self):
         code, out = self.run_main(["--explain"])
         self.assertEqual(code, 0)

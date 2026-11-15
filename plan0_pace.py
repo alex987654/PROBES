@@ -44,6 +44,11 @@ DEFAULT_SYSTEMS = 1.0e11
 
 GALAXY_MODELS = ("exponential", "uniform")
 
+# Beyond this duration the galaxy itself rotates, shears and forms stars
+# on the timescale of the survey, none of which the model follows; any
+# longer result is a scale estimate and is labeled so at the headline.
+SCALE_ESTIMATE_YEARS = 1.0e8
+
 # ---------------------------------------------------------------------------
 # Archive layout presets
 #
@@ -678,6 +683,7 @@ def derive(sc: Scenario) -> dict:
         ),
         attrition=attrition,
         fleet_exhausted=math.isinf(total_s),
+        scale_estimate=total_s / YEAR_S > SCALE_ESTIMATE_YEARS,
         total_years=total_s / YEAR_S,
         total_seconds=total_s,
         milestones=milestones,
@@ -877,6 +883,11 @@ def render_report(r: dict, canonical: bool = False) -> str:
         add(line)
     add("")
     add("HEADLINE:   full survey in %s" % fmt_years(r["total_years"], canonical))
+    if r["scale_estimate"] and not r["fleet_exhausted"]:
+        add("            a scale estimate only: past %s the galaxy"
+            % fmt_years(SCALE_ESTIMATE_YEARS, canonical))
+        add("            itself turns, shears and forms new stars, which is")
+        add("            not modeled (see Caveats)")
     if r["attrition"]["completed_fraction"] < 1.0:
         add("            WARNING: attrition exhausts the fleet at %.1f%%"
             " completion" % (100 * r["attrition"]["completed_fraction"]))
@@ -979,7 +990,7 @@ def render_report(r: dict, canonical: bool = False) -> str:
     add("")
     add("Caveats")
     add("-" * 60)
-    add("  Galactic rotation, stellar evolution, and density gradients are")
+    add("  Galactic rotation, the drift of stars, and stellar evolution are")
     add("  ignored; on timescales beyond ~1e8 years treat results as scale")
     add("  estimates. The duplication factor is a documented approximation")
     add("  (see --explain); the event-level dynamics are out of scope.")
