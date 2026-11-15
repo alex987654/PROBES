@@ -190,7 +190,13 @@ class Scenario:
     bulge_radius_kpc: float = 1.0        # sphere holding half the bulge
     depth: float = 1.0                   # fraction of systems visited
     dwell_years: float = 10.0            # survey + refuel stay per system
-    path_factor: float = 1.0             # route efficiency multiplier
+    # Route length per hop in units of the mean spacing between systems.
+    # 0.78: always going to the nearest unvisited system, in an open field
+    # of random points (simulated; 0.83 when confined to one region of
+    # 1000 systems). 0.70: the shortest route through random points
+    # (Cerf and others 1997). 1.0: one mean spacing per hop, the old
+    # default, an upper bound for any sensible route.
+    path_factor: float = 0.78
     region_systems: float = 1000.0       # visited systems per record region
     dispersal_leg_kpc: float = 10.0      # PROC-DSP mean leg; section 4.5
     envelope_factor: float = 1.5         # activation-epoch margin on dispersal
@@ -375,8 +381,11 @@ INPUT_TABLE = [
     ("dwell_years", 1.0, 1000.0, "log", True,
      "assumption; no study fixes the stay per system"),
     ("path_factor", 0.70, 1.0, "linear", True,
-     "1.0 is one mean spacing per hop, an upper bound; the shortest "
-     "route through random points costs 0.70 (Cerf and others 1997)"),
+     "0.78 is the rule 'go to the nearest unvisited system' in an open "
+     "field of random points (simulated; 0.83 inside one region of 1000 "
+     "systems); the shortest route through random points costs 0.70 "
+     "(Cerf and others 1997); 1.0 is one mean spacing per hop, an upper "
+     "bound"),
     ("region_systems", None, None, None, False,
      "assumption; the specification fixes no region size"),
     ("dispersal_leg_kpc", None, None, None, False,
@@ -1665,8 +1674,12 @@ def build_parser() -> argparse.ArgumentParser:
                         "refueling stops (default 10)")
     g.add_argument("--path-factor", type=float, metavar="NUMBER",
                    dest="path_factor",
-                   help="route efficiency multiplier on the hop between "
-                        "neighboring systems (default 1.0)")
+                   help="length of the route per visited system, as a "
+                        "multiple of the mean distance between neighboring "
+                        "systems: 1.0 is one mean distance per hop, 0.78 "
+                        "is what always going to the nearest unvisited "
+                        "system achieves, 0.70 is the shortest possible "
+                        "route (default 0.78)")
     g.add_argument("--region-systems", type=float, metavar="COUNT",
                    dest="region_systems",
                    help="visited systems per completion-record region; sets "

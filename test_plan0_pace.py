@@ -64,11 +64,11 @@ class TestModel(unittest.TestCase):
     def test_default_headline_in_sane_range(self):
         # A coarse tripwire only; the identities are pinned elsewhere.
         # The band moves whenever a default moves, on purpose. It is now
-        # centered on 1.4 billion years: 1e11 systems in an exponential
-        # disc with a bulge, at one mean spacing per hop.
+        # centered on 1.1 billion years: 1e11 systems in an exponential
+        # disc with a bulge, at 0.78 mean spacings per hop.
         r = pp.derive(pp.Scenario())
-        self.assertGreater(r["total_years"], 1.1e9)
-        self.assertLess(r["total_years"], 1.8e9)
+        self.assertGreater(r["total_years"], 0.9e9)
+        self.assertLess(r["total_years"], 1.4e9)
 
     def test_regime_table_cross_checks(self):
         # Physical Layer section 1: 0.27 kiloparsecs at 0.05 c takes about
@@ -591,7 +591,7 @@ class TestDefaultsTable(unittest.TestCase):
     def test_explain_prints_the_table(self):
         text = pp.render_explain(pp.derive(pp.Scenario()))
         self.assertIn("DEFAULTS, THEIR SOURCES AND PLAUSIBLE RANGES", text)
-        table = text[text.index("DEFAULTS, THEIR SOURCES"):]
+        table = " ".join(text[text.index("DEFAULTS, THEIR SOURCES"):].split())
         for action in pp.build_parser()._actions:
             if action.dest in {f.name for f in pp.fields(pp.Scenario)}:
                 self.assertIn(action.option_strings[0], table)
@@ -807,6 +807,41 @@ class TestGalaxyModel(unittest.TestCase):
         self.assertAlmostEqual(inner / outer, math.exp(12.0 / 2.6))
         self.assertAlmostEqual(inner / outer, 101.0, delta=0.5)
         self.assertEqual(pp.midplane_density(gal, 15_001.0), 0.0)
+
+    def test_default_path_factor_is_the_nearest_unvisited_rule(self):
+        # Audit C1. Walk 1200 random points in a box that wraps around,
+        # always stepping to the nearest point not yet visited, and
+        # compare the mean step with the default (in mean spacings).
+        rng = random.Random(4)
+        count = 1200
+        points = [(rng.random(), rng.random(), rng.random())
+                  for _ in range(count)]
+        left = list(range(1, count))
+        here = points[0]
+        total = 0.0
+        while left:
+            best, best_d2 = 0, 9.0
+            for slot, index in enumerate(left):
+                p = points[index]
+                dx = abs(p[0] - here[0])
+                dy = abs(p[1] - here[1])
+                dz = abs(p[2] - here[2])
+                d2 = (min(dx, 1 - dx) ** 2 + min(dy, 1 - dy) ** 2
+                      + min(dz, 1 - dz) ** 2)
+                if d2 < best_d2:
+                    best, best_d2 = slot, d2
+            total += math.sqrt(best_d2)
+            here = points[left[best]]
+            left[best] = left[-1]
+            left.pop()
+        mean_step = total / (count - 1) / count ** (-1.0 / 3.0)
+        self.assertAlmostEqual(mean_step, pp.Scenario().path_factor,
+                               delta=0.03)
+        # It sits between the shortest possible route and one mean
+        # spacing per hop, the ends of its plausible range.
+        row = next(row for row in pp.INPUT_TABLE if row[0] == "path_factor")
+        self.assertEqual((row[1], row[2]), (0.70, 1.0))
+        self.assertLess(0.6979, pp.Scenario().path_factor)
 
     def test_hop_identities(self):
         sc = pp.Scenario(path_factor=0.9)
