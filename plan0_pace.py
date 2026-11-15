@@ -50,6 +50,21 @@ GALAXY_MODELS = ("exponential", "uniform")
 # longer result is a scale estimate and is labeled so at the headline.
 SCALE_ESTIMATE_YEARS = 1.0e8
 
+# Distance at which the link budget of Physical Layer section 2.2 holds;
+# the bit rate given for the link refers to it.
+LINK_REFERENCE_M = 8.0e18
+
+# Figures used only to put numbers on what the model leaves out.
+ROTATION_SPEED_M_S = 2.3e5              # orbital speed, similar at all radii
+RANDOM_SPEEDS_M_S = (2.0e4, 6.0e4)      # stars relative to their neighbors
+STAR_FORMATION_SOLAR_MASSES_PER_YEAR = 1.65     # Licquia and Newman 2015
+SOLAR_MASSES_PER_SYSTEM = 0.54                  # see DEFAULT_SYSTEMS
+STORED_ENERGY_LEG_YEARS = 1.0e4         # cruise leg named in section 6.1
+# Simulated: 10,000 seeds scattered at random through a uniform disc, each
+# probe keeping to the systems nearest its seed, no work handed over.
+UNBALANCED_DONE_AT_NOMINAL_TIME = 0.79
+UNBALANCED_TIME_FOR_99_PERCENT = 2.3
+
 # Exhaust speeds (fractions of light speed) quoted in every report.
 REFERENCE_EXHAUST = (
     (0.089, "the ideal limit for fusion of deuterium and helium-3"),
@@ -844,6 +859,82 @@ def mean_hop_seconds(gal: dict, hop_scale: float, v: float,
     return total, reach
 
 
+# ---------------------------------------------------------------------------
+# Numbers on what the model leaves out
+# ---------------------------------------------------------------------------
+
+
+def share_leaving_cube(x: float) -> float:
+    """Share of points spread evenly through a cube that end up outside
+    it after each moves the same distance, x cube sides, in a random
+    direction."""
+    if x <= 0.0:
+        return 0.0
+    if x <= 1.0:
+        # 1 - mean of (1 - x|a|)(1 - x|b|)(1 - x|c|) over unit vectors
+        return 1.5 * x - 2.0 / math.pi * x * x + x ** 3 / (4.0 * math.pi)
+    # Past one side a factor can reach zero: average over the directions
+    # of one octant numerically.
+    steps = 120
+    stay = 0.0
+    for i in range(steps):
+        cos_t = (i + 0.5) / steps
+        sin_t = math.sqrt(1.0 - cos_t * cos_t)
+        for j in range(steps):
+            phi = (j + 0.5) / steps * math.pi / 2.0
+            stay += (max(0.0, 1.0 - x * sin_t * math.cos(phi))
+                     * max(0.0, 1.0 - x * sin_t * math.sin(phi))
+                     * max(0.0, 1.0 - x * cos_t))
+    return 1.0 - stay / steps ** 2
+
+
+def central_load_factor(sc: Scenario, gal: dict) -> float:
+    """Systems per unit of disc area at the center, over the average.
+    With seeds spread evenly over the disc area this is how many times
+    the mean workload the central probes would carry."""
+    if gal["model"] == "uniform":
+        return 1.0
+    radius2 = gal["disc_radius_pc"] ** 2
+    xm = gal["disc_radius_pc"] / gal["scale_length_pc"]
+    factor = (1.0 - sc.bulge_fraction) * radius2 / (
+        2.0 * gal["scale_length_pc"] ** 2 * _g1(xm))
+    if gal["bulge_sigma_pc"]:
+        factor += sc.bulge_fraction * radius2 / (
+            2.0 * gal["bulge_sigma_pc"] ** 2)
+    return factor
+
+
+def left_out(sc: Scenario, gal: dict, nominal_years: float,
+             region_cycle_years: float, region_systems: float,
+             stay_years: float, dispersal_years: float) -> dict:
+    """Sizes of the effects the model does not follow, for the caveats."""
+    half_radius_m = sc.disc_radius_kpc / 2.0 * KPC_M
+    turn_years = 2.0 * math.pi * half_radius_m / ROTATION_SPEED_M_S / YEAR_S
+    # A region of this many visited systems at the mean spacing.
+    side_pc = (region_systems / sc.depth) ** (1.0 / 3.0) \
+        * gal["mean_spacing_pc"]
+    drift = []
+    for speed in RANDOM_SPEEDS_M_S:
+        moved_pc = speed * region_cycle_years * YEAR_S / PARSEC_M
+        drift.append(share_leaving_cube(moved_pc / side_pc))
+    stops = dispersal_years / STORED_ENERGY_LEG_YEARS
+    return dict(
+        turns_at_half_radius=nominal_years / turn_years,
+        turn_years=turn_years,
+        # Orbits at different radii slide past each other: with the same
+        # orbital speed everywhere, two points drift apart by their own
+        # separation in radius / speed.
+        shear_years=half_radius_m / ROTATION_SPEED_M_S / YEAR_S,
+        region_side_parsec=side_pc,
+        drift_out_shares=drift,
+        new_system_share=(STAR_FORMATION_SOLAR_MASSES_PER_YEAR
+                          * nominal_years
+                          / (gal["systems"] * SOLAR_MASSES_PER_SYSTEM)),
+        central_load_factor=central_load_factor(sc, gal),
+        scattering_stops=stops,
+        scattering_stop_years=stops * stay_years)
+
+
 def _unused_inputs(sc: Scenario, layout: dict, gal: dict) -> list:
     """Inputs that were set to something other than their default but
     cannot change this run, each with the reason. An input that does
@@ -1017,11 +1108,16 @@ def derive(sc: Scenario, detail: bool = True) -> dict:
 
     # Communication totals (coordination traffic only; bulk data rides along
     # as physical cargo at probe speed, Physical Layer section 2.3).
+    # The bit rate holds at the reference distance of the link budget;
+    # received power, and the rate with it, falls with the square of the
+    # distance. A link spans the distance between archive points.
     if dep_every is None:
         messages_per_probe = 0.0
+        link_rate_bps = sc.bitrate_bps
     else:
         messages_per_probe = regions_per_probe
-    link_s_per_message = sc.message_bytes * 8.0 / sc.bitrate_bps
+        link_rate_bps = sc.bitrate_bps * (LINK_REFERENCE_M / spacing_m) ** 2
+    link_s_per_message = sc.message_bytes * 8.0 / link_rate_bps
     link_s_per_probe = messages_per_probe * link_s_per_message
     fleet_messages = messages_per_probe * sc.probes
 
@@ -1106,9 +1202,15 @@ def derive(sc: Scenario, detail: bool = True) -> dict:
         comms=dict(
             messages_per_probe=messages_per_probe,
             fleet_messages=fleet_messages,
+            link_rate_bps=link_rate_bps,
+            link_distance_m=None if dep_every is None else spacing_m,
             link_seconds_per_message=link_s_per_message,
             link_years_per_probe=link_s_per_probe / YEAR_S,
         ),
+        left_out=left_out(
+            sc, gal, (dispersal_s + survey_s) / YEAR_S, t_region_s / YEAR_S,
+            region_systems, dwell_s / YEAR_S,
+            dispersal_s / YEAR_S) if detail else None,
         distance=dict(
             dispersal_m=dispersal_m,
             survey_path_m=survey_path_m,
@@ -1435,6 +1537,61 @@ def describe_kinematics(r: dict, canonical: bool = False) -> list:
     return fill(text)
 
 
+def describe_left_out(r: dict, canonical: bool = False) -> list:
+    """The caveats, each with its size for this scenario."""
+    out = r["left_out"]
+    gal = r["galaxy"]
+    balance = (
+        "Balance. The milestones assume every probe ends with an equal "
+        "share, as if work were handed over at no cost. If each probe "
+        "kept to the systems nearest its seed, with seeds scattered at "
+        "random through a uniform disc, %s would be done at the nominal "
+        "time and reaching 99%% would take %s times as long (simulated)."
+        % (percent(UNBALANCED_DONE_AT_NOMINAL_TIME),
+           sig(UNBALANCED_TIME_FOR_99_PERCENT, 2)))
+    if gal["model"] == "exponential":
+        balance += (
+            " In this galaxy model the center holds %s times as many "
+            "systems per unit of disc area as the average, so seeds spread "
+            "evenly over the area would leave the central probes with that "
+            "many times the mean load." % sig(out["central_load_factor"], 2))
+    balance += (" Moving work between probes is what the archives are for, "
+                "and it is not modeled.")
+    duplication = (
+        "Duplication. The duplicated-work fraction is a rough formula (see "
+        "--explain), not derived from the region-selection rule: it treats "
+        "every choice of a region as an independent draw and holds the "
+        "case without archives at its ceiling by decree.")
+    low, high = out["drift_out_shares"]
+    deep = (
+        "Deep time. The survey lasts %s turns of the galaxy at half the "
+        "disc radius, and two points on neighboring orbits there drift "
+        "apart by their own separation every %s, so neither the archive "
+        "network nor the regions hold still. While one region is surveyed "
+        "(%s) the random motion of stars, %s to %s kilometers per second, "
+        "carries %s to %s of them out of a fixed volume of the region's "
+        "size: a finished volume does not stay finished, and regions have "
+        "to be lists of targets. About %s as many systems as are counted "
+        "today form during the survey."
+        % (sig(out["turns_at_half_radius"], 2),
+           fmt_duration(out["shear_years"], canonical),
+           fmt_duration(r["region_cycle_years"], canonical),
+           sig(RANDOM_SPEEDS_M_S[0] / 1e3, 2),
+           sig(RANDOM_SPEEDS_M_S[1] / 1e3, 2),
+           percent(low), percent(high), percent(out["new_system_share"])))
+    scattering = (
+        "Scattering. Counted as one uninterrupted cruise, although "
+        "Physical Layer 6.1 has probes refuel at stars. A stop every %s "
+        "would add about %s stays, %s in all."
+        % (fmt_duration(STORED_ENERGY_LEG_YEARS, canonical, 1),
+           sig(out["scattering_stops"], 2),
+           fmt_duration(out["scattering_stop_years"], canonical)))
+    lines = []
+    for text in (balance, duplication, deep, scattering):
+        lines += fill(text)
+    return lines
+
+
 def describe_losses(r: dict, canonical: bool = False) -> list:
     """Report lines on how many probes the survey can afford to lose."""
     a = r["attrition"]
@@ -1657,22 +1814,42 @@ def render_report(r: dict, canonical: bool = False) -> str:
     add("  wire messages per probe:  %s   fleet: %s"
         % (human_count(c["messages_per_probe"]),
            human_count(c["fleet_messages"])))
-    add("  link time per message:    %.2g hours at %.2g bits per second"
-        % (c["link_seconds_per_message"] / 3600, sc["bitrate_bps"]))
-    add("  link time per probe:      %s  (negligible - the wire form is"
-        % fmt_years(c["link_years_per_probe"], canonical))
-    add("  the channel's admission ticket, Physical Layer 2.2)")
+    if c["link_distance_m"] is None:
+        add("  no archive points, so no messages are sent")
+    else:
+        hours = c["link_seconds_per_message"] / 3600.0
+        text = ("link time per message: %s at %s bits per second. The link "
+                "budget gives %s bits per second at its reference distance "
+                "of %s; the rate falls with the square of the distance, "
+                "here the %s between archive points."
+                % ("%s hours" % sig(hours, 2) if hours < 48
+                   else "%s days" % sig(hours / 24.0, 2),
+                   sig(c["link_rate_bps"], 2), sig(sc["bitrate_bps"], 2),
+                   fmt_kiloparsecs(LINK_REFERENCE_M / KPC_M, canonical),
+                   fmt_kiloparsecs(c["link_distance_m"] / KPC_M, canonical)))
+        for line in fill(text):
+            add(line)
+        share = (c["link_years_per_probe"] / r["total_years"]
+                 if math.isfinite(r["total_years"]) else 0.0)
+        text = ("link time per probe: %s, %s. The wire form is the "
+                "channel's admission ticket (Physical Layer 2.2)."
+                % (fmt_years(c["link_years_per_probe"], canonical),
+                   "negligible" if share < 1e-3
+                   else "%s of the survey" % percent(share)))
+        for line in fill(text):
+            add(line)
     add("")
     add("Knowledge staleness and duplication")
     add("-" * 60)
     if r["staleness_infinite"]:
         add("  no shared archives: staleness unbounded, duplication at cap")
     else:
-        add("  completion facts are up to %s old when a region is chosen:"
-            % fmt_years(r["staleness_years"], canonical))
+        add("  completion facts are up to %s old when a region is"
+            % fmt_duration(r["staleness_years"], canonical, 3))
+        add("  chosen, the sum of:")
         for name, years in r["staleness_parts_years"].items():
-            add("    %-34s %s" % (_STALENESS_LABELS[name],
-                                  fmt_years(years, canonical)))
+            add("    %-36s %s" % (_STALENESS_LABELS[name],
+                                  fmt_duration(years, canonical, 3)))
     add("  duplicated-work fraction: %.3g (cap %.2g)"
         % (r["duplication_fraction"], sc["dup_cap"]))
     if r["duplication_capped"]:
@@ -1698,16 +1875,16 @@ def render_report(r: dict, canonical: bool = False) -> str:
     g = r["geometry"]
     add("Fleet geometry for this scenario (Physical Layer section 1)")
     add("-" * 60)
-    add("  mean probe spacing:        %s (%s on a lattice"
-        % (fmt_kiloparsecs(g["spacing_kpc"], canonical),
-           fmt_kiloparsecs(g["lattice_spacing_kpc"], canonical)))
-    add("                             with six neighbors)")
+    add("  mean probe spacing:        %s"
+        % fmt_kiloparsecs(g["spacing_kpc"], canonical))
+    add("                             (%s on a lattice with six neighbors)"
+        % fmt_kiloparsecs(g["lattice_spacing_kpc"], canonical))
     add("  light time per spacing:    %s"
-        % fmt_years(g["light_years_per_spacing"], canonical))
+        % fmt_duration(g["light_years_per_spacing"], canonical, 3))
     add("  probe transit per spacing: %s"
-        % fmt_years(g["transit_years_per_spacing"], canonical))
+        % fmt_duration(g["transit_years_per_spacing"], canonical, 3))
     add("  consolidation cadence:     %s, %.2f of a probe transit"
-        % (fmt_years(sc["consolidation_years"], canonical),
+        % (fmt_duration(sc["consolidation_years"], canonical, 3),
            g["cadence_in_transits"]))
     low, high = g["relay_reach_spacings"]
     hops_low, hops_high = g["useful_relay_hops"]
@@ -1726,10 +1903,8 @@ def render_report(r: dict, canonical: bool = False) -> str:
     add("")
     add("Caveats")
     add("-" * 60)
-    add("  Galactic rotation, the drift of stars, and stellar evolution are")
-    add("  ignored; on timescales beyond ~1e8 years treat results as scale")
-    add("  estimates. The duplication factor is a documented approximation")
-    add("  (see --explain); the event-level dynamics are out of scope.")
+    for line in describe_left_out(r, canonical):
+        add(line)
     return "\n".join(lines)
 
 
@@ -2126,9 +2301,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="deposit records only after every Nth region")
     g.add_argument("--bitrate", type=float, metavar="NUMBER",
                    dest="bitrate_bps",
-                   help="optical link speed in bits per second between a "
-                        "probe and an archive point (default 0.5; the "
-                        "specification derives 0.1 to 1)")
+                   help="optical link speed in bits per second at the "
+                        "reference distance of the specification's link "
+                        "budget (default 0.5; the specification derives "
+                        "0.1 to 1); the rate used falls with the square "
+                        "of the distance between archive points")
     g.add_argument("--message-bytes", type=float, metavar="COUNT",
                    dest="message_bytes",
                    help="size of one compact survey message (default 500)")

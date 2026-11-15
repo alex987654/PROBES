@@ -266,11 +266,36 @@ class TestIdentities(unittest.TestCase):
             self.assertSame(m["years"], dispersal + m["fraction"] * survey)
 
     def test_link_time_is_bits_over_bit_rate(self):
-        sc = pp.Scenario(bitrate_bps=0.25, message_bytes=800.0)
+        # At the reference distance of the link budget the rate is the
+        # one given.
+        reference_kpc = pp.LINK_REFERENCE_M / pp.KPC_M
+        sc = pp.Scenario(bitrate_bps=0.25, message_bytes=800.0,
+                         cache_spacing_kpc=reference_kpc)
         c = pp.derive(sc)["comms"]
+        self.assertSame(c["link_rate_bps"], 0.25)
         self.assertSame(c["link_seconds_per_message"], 800.0 * 8 / 0.25)
         self.assertSame(c["fleet_messages"],
                         c["messages_per_probe"] * sc.probes)
+
+    def test_bit_rate_falls_with_the_square_of_the_link_distance(self):
+        # Audit C9: the sparse layout kept the full rate over 5
+        # kiloparsecs.
+        reference_kpc = pp.LINK_REFERENCE_M / pp.KPC_M
+        near = pp.derive(pp.Scenario(cache_spacing_kpc=reference_kpc))
+        far = pp.derive(pp.Scenario(cache_spacing_kpc=3 * reference_kpc))
+        self.assertSame(far["comms"]["link_rate_bps"] * 9,
+                        near["comms"]["link_rate_bps"])
+        self.assertSame(far["comms"]["link_seconds_per_message"],
+                        9 * near["comms"]["link_seconds_per_message"])
+        sparse = pp.derive(pp.Scenario(archives="sparse"))["comms"]
+        self.assertSame(sparse["link_rate_bps"],
+                        0.5 * (8.0e18 / (5.0 * pp.KPC_M)) ** 2)
+        self.assertLess(sparse["link_rate_bps"], 0.002)
+        self.assertIn("days at", pp.render_report(
+            pp.derive(pp.Scenario(archives="sparse"))))
+        none = pp.derive(pp.Scenario(archives="none"))
+        self.assertIsNone(none["comms"]["link_distance_m"])
+        self.assertIn("no messages are sent", pp.render_report(none))
 
     @staticmethod
     def probe_years_worked(rate, start_years, end_years, steps=20_000):
@@ -1121,6 +1146,94 @@ class TestStopAndGo(unittest.TestCase):
         given = " ".join(pp.render_report(pp.derive(
             pp.Scenario(acceleration_m_s2=0.01))).split())
         self.assertIn("Cruise speed is reached on only", given)
+
+
+class TestLeftOut(unittest.TestCase):
+    """Audit C6 to C9: the caveats carry numbers for the scenario."""
+
+    def test_share_leaving_a_cube(self):
+        # Closed form against a direct average over directions.
+        def direct(x, steps=300):
+            stay = 0.0
+            for i in range(steps):
+                cos_t = (i + 0.5) / steps
+                sin_t = math.sqrt(1 - cos_t * cos_t)
+                for j in range(steps):
+                    phi = (j + 0.5) / steps * math.pi / 2
+                    stay += (max(0.0, 1 - x * sin_t * math.cos(phi))
+                             * max(0.0, 1 - x * sin_t * math.sin(phi))
+                             * max(0.0, 1 - x * cos_t))
+            return 1 - stay / steps ** 2
+
+        for x in (0.05, 0.143, 0.429, 0.9, 1.0):
+            self.assertAlmostEqual(pp.share_leaving_cube(x), direct(x),
+                                   places=4, msg=x)
+        self.assertEqual(pp.share_leaving_cube(0.0), 0.0)
+        self.assertAlmostEqual(pp.share_leaving_cube(1.0000001),
+                               pp.share_leaving_cube(1.0), places=3)
+        self.assertAlmostEqual(pp.share_leaving_cube(1.5), direct(1.5),
+                               places=3)
+        self.assertGreater(pp.share_leaving_cube(3.0), 0.999)
+        # The audited region: 21.5 parsecs across, 150,500 years, stars
+        # at 20 and 60 kilometers per second. The audit quotes 18 and 48
+        # percent; a cube gives 20 and 53.
+        self.assertAlmostEqual(pp.share_leaving_cube(3.08 / 21.54), 0.201,
+                               delta=0.002)
+        self.assertAlmostEqual(pp.share_leaving_cube(9.24 / 21.54), 0.532,
+                               delta=0.002)
+
+    def test_deep_time_figures_on_the_audited_inputs(self):
+        out = pp.derive(pp.Scenario(**TestIdentities.AUDITED))["left_out"]
+        # 3.04 billion years; one turn at 7.5 kiloparsecs and 230
+        # kilometers per second takes 200 million years.
+        self.assertAlmostEqual(out["turn_years"] / 2.003e8, 1.0, delta=0.002)
+        self.assertAlmostEqual(out["turns_at_half_radius"], 15.2, delta=0.1)
+        self.assertAlmostEqual(out["shear_years"] / 3.19e7, 1.0, delta=0.005)
+        self.assertAlmostEqual(out["region_side_parsec"], 21.54, delta=0.01)
+        low, high = out["drift_out_shares"]
+        self.assertAlmostEqual(low, 0.201, delta=0.003)
+        self.assertAlmostEqual(high, 0.532, delta=0.003)
+        self.assertAlmostEqual(
+            out["new_system_share"],
+            1.65 * 3.039e9 / (2e11 * 0.54), delta=0.0005)
+        self.assertEqual(out["central_load_factor"], 1.0)   # uniform disc
+
+    def test_central_load_factor_of_the_exponential_disc(self):
+        # Disc only: surface density at the center over the disc average,
+        # xm^2 / (2 g(xm)); 17 for a scale length of 2.6 in a disc of 15.
+        r = pp.derive(pp.Scenario(bulge_fraction=0.0))
+        xm = 15.0 / 2.6
+        expected = xm * xm / (2 * (1 - math.exp(-xm) * (1 + xm)))
+        self.assertAlmostEqual(r["left_out"]["central_load_factor"],
+                               expected)
+        self.assertAlmostEqual(expected, 17.0, delta=0.05)
+        with_bulge = pp.derive(pp.Scenario())["left_out"]
+        self.assertGreater(with_bulge["central_load_factor"], expected)
+
+    def test_scattering_stops(self):
+        r = pp.derive(pp.Scenario())
+        out = r["left_out"]
+        self.assertAlmostEqual(out["scattering_stops"],
+                               r["phases"]["dispersal_years"] / 1e4)
+        self.assertAlmostEqual(out["scattering_stop_years"],
+                               out["scattering_stops"] * 10.0)
+
+    def test_caveats_name_each_effect_with_its_size(self):
+        r = pp.derive(pp.Scenario())
+        text = " ".join(pp.render_report(r).split())
+        caveats = text[text.index("Caveats"):]
+        for phrase in ["Balance.", "Duplication.", "Deep time.",
+                       "Scattering.", "79% would be done",
+                       "2.3 times as long",
+                       "regions have to be lists of targets",
+                       "turns of the galaxy at half the disc radius"]:
+            self.assertIn(phrase, caveats)
+        self.assertIn("%s times as many systems per unit of disc area"
+                      % pp.sig(r["left_out"]["central_load_factor"], 2),
+                      caveats)
+        flat = " ".join(pp.render_report(
+            pp.derive(pp.Scenario(galaxy_model="uniform"))).split())
+        self.assertNotIn("per unit of disc area", flat)
 
 
 class TestLossThreshold(unittest.TestCase):
