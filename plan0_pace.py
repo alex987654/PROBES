@@ -1110,13 +1110,15 @@ def derive(sc: Scenario, detail: bool = True) -> dict:
     # as physical cargo at probe speed, Physical Layer section 2.3).
     # The bit rate holds at the reference distance of the link budget;
     # received power, and the rate with it, falls with the square of the
-    # distance. A link spans the distance between archive points.
-    if dep_every is None:
-        messages_per_probe = 0.0
-        link_rate_bps = sc.bitrate_bps
-    else:
-        messages_per_probe = regions_per_probe
-        link_rate_bps = sc.bitrate_bps * (LINK_REFERENCE_M / spacing_m) ** 2
+    # distance. Between staffed stations a link spans their spacing.
+    # Unattended boxes have no power to beam with: a probe hands its
+    # records over at the box, at close range, so no distance penalty
+    # applies there.
+    messages_per_probe = 0.0 if dep_every is None else regions_per_probe
+    link_m = spacing_m if dep_every and layout["consolidated"] else None
+    link_rate_bps = sc.bitrate_bps
+    if link_m is not None:
+        link_rate_bps *= (LINK_REFERENCE_M / link_m) ** 2
     link_s_per_message = sc.message_bytes * 8.0 / link_rate_bps
     link_s_per_probe = messages_per_probe * link_s_per_message
     fleet_messages = messages_per_probe * sc.probes
@@ -1203,7 +1205,7 @@ def derive(sc: Scenario, detail: bool = True) -> dict:
             messages_per_probe=messages_per_probe,
             fleet_messages=fleet_messages,
             link_rate_bps=link_rate_bps,
-            link_distance_m=None if dep_every is None else spacing_m,
+            link_distance_m=link_m,
             link_seconds_per_message=link_s_per_message,
             link_years_per_probe=link_s_per_probe / YEAR_S,
         ),
@@ -1814,19 +1816,27 @@ def render_report(r: dict, canonical: bool = False) -> str:
     add("  wire messages per probe:  %s   fleet: %s"
         % (human_count(c["messages_per_probe"]),
            human_count(c["fleet_messages"])))
-    if c["link_distance_m"] is None:
+    if c["messages_per_probe"] == 0:
         add("  no archive points, so no messages are sent")
     else:
         hours = c["link_seconds_per_message"] / 3600.0
-        text = ("link time per message: %s at %s bits per second. The link "
-                "budget gives %s bits per second at its reference distance "
-                "of %s; the rate falls with the square of the distance, "
-                "here the %s between archive points."
+        text = ("link time per message: %s at %s bits per second."
                 % ("%s hours" % sig(hours, 2) if hours < 48
                    else "%s days" % sig(hours / 24.0, 2),
-                   sig(c["link_rate_bps"], 2), sig(sc["bitrate_bps"], 2),
-                   fmt_kiloparsecs(LINK_REFERENCE_M / KPC_M, canonical),
-                   fmt_kiloparsecs(c["link_distance_m"] / KPC_M, canonical)))
+                   sig(c["link_rate_bps"], 2)))
+        if c["link_distance_m"] is None:
+            text += (" Records are handed over at the unattended boxes "
+                     "themselves, at close range, so the rate of the link "
+                     "budget is used as it stands.")
+        else:
+            text += (" The link budget gives %s bits per second at its "
+                     "reference distance of %s; the rate falls with the "
+                     "square of the distance, here the %s between archive "
+                     "stations."
+                     % (sig(sc["bitrate_bps"], 2),
+                        fmt_kiloparsecs(LINK_REFERENCE_M / KPC_M, canonical),
+                        fmt_kiloparsecs(c["link_distance_m"] / KPC_M,
+                                        canonical)))
         for line in fill(text):
             add(line)
         share = (c["link_years_per_probe"] / r["total_years"]
@@ -2305,7 +2315,7 @@ def build_parser() -> argparse.ArgumentParser:
                         "reference distance of the specification's link "
                         "budget (default 0.5; the specification derives "
                         "0.1 to 1); the rate used falls with the square "
-                        "of the distance between archive points")
+                        "of the distance between archive stations")
     g.add_argument("--message-bytes", type=float, metavar="COUNT",
                    dest="message_bytes",
                    help="size of one compact survey message (default 500)")

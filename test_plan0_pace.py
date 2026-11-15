@@ -296,6 +296,14 @@ class TestIdentities(unittest.TestCase):
         none = pp.derive(pp.Scenario(archives="none"))
         self.assertIsNone(none["comms"]["link_distance_m"])
         self.assertIn("no messages are sent", pp.render_report(none))
+        # Unattended boxes cannot beam: records are handed over at the
+        # box, so the budget rate applies whatever the box spacing.
+        boxes = pp.derive(pp.Scenario(archives="route-boxes-only",
+                                      cache_spacing_kpc=40.0))
+        self.assertIsNone(boxes["comms"]["link_distance_m"])
+        self.assertEqual(boxes["comms"]["link_rate_bps"], 0.5)
+        self.assertIn("handed over at the unattended boxes",
+                      " ".join(pp.render_report(boxes).split()))
 
     @staticmethod
     def probe_years_worked(rate, start_years, end_years, steps=20_000):
