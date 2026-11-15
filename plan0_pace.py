@@ -50,6 +50,12 @@ GALAXY_MODELS = ("exponential", "uniform")
 # longer result is a scale estimate and is labeled so at the headline.
 SCALE_ESTIMATE_YEARS = 1.0e8
 
+# Exhaust speeds (fractions of light speed) quoted in every report.
+REFERENCE_EXHAUST = (
+    (0.089, "the ideal limit for fusion of deuterium and helium-3"),
+    (0.03, "the class of the 1978 fusion-probe study"),
+)
+
 # ---------------------------------------------------------------------------
 # Archive layout presets
 #
@@ -142,6 +148,8 @@ _NUMBER_RULES = {
     "dwell_years": (0, True, None, False),
     "path_factor": (0, False, None, False),
     "acceleration_m_s2": (0, False, None, False),
+    "exhaust_speed_c": (0, False, 1, False),
+    "refuel_years_per_mass": (0, True, None, False),
     "region_systems": (0, False, None, False),
     "dispersal_leg_kpc": (0, True, None, False),
     "envelope_factor": (0, False, None, False),
@@ -203,6 +211,14 @@ class Scenario:
     # Acceleration and braking, meters per second squared. None treats
     # stops and starts as instant, the limit of strong engines.
     acceleration_m_s2: Optional[float] = None
+    # Propellant. Every stop costs a velocity change of twice the cruise
+    # speed, so a probe leaves each system carrying exp(2 v / exhaust
+    # speed) times its empty mass. 0.089 is the ideal limit for fusion of
+    # deuterium and helium-3 (18.35 MeV from 5.03 atomic mass units).
+    exhaust_speed_c: float = 0.089
+    # Years to gather propellant equal to the empty mass. 0 leaves the
+    # stay per system at dwell_years whatever the speed.
+    refuel_years_per_mass: float = 0.0
     region_systems: float = 1000.0       # visited systems per record region
     # Scattering before the survey (Physical Layer section 4.5). No probe
     # may start before the last one can have arrived, or the start times
@@ -401,6 +417,13 @@ INPUT_TABLE = [
      "not modeled unless given; the 1978 fusion-probe study reached 0.12 "
      "of light speed after 3.8 years of thrust, about 0.3 meters per "
      "second squared"),
+    ("exhaust_speed_c", 0.03, 0.089, "log", False,
+     "0.089 is the ideal limit for fusion of deuterium and helium-3; the "
+     "1978 fusion-probe study assumed 0.031 to 0.035. It sets the "
+     "propellant per stop, and the survey time only together with the "
+     "next input"),
+    ("refuel_years_per_mass", None, None, None, False,
+     "not modeled unless given; no study fixes a harvesting rate"),
     ("region_systems", None, None, None, False,
      "assumption; the specification fixes no region size"),
     ("dispersal_leg_kpc", None, None, None, False,
@@ -843,6 +866,11 @@ def _unused_inputs(sc: Scenario, layout: dict, gal: dict) -> list:
         for name in ("scale_length_kpc", "bulge_fraction",
                      "bulge_radius_kpc"):
             note(name, why)
+    if sc.refuel_years_per_mass == 0:
+        note("exhaust_speed_c",
+             "it changes the propellant figures shown, but the stay per "
+             "system does not grow with them unless %s is set"
+             % "--refuel-years")
     if gal["source"] == "count and density":
         note("disc_thickness_kpc",
              "count and density were both given, so the disc volume is "
@@ -886,7 +914,14 @@ def derive(sc: Scenario, detail: bool = True) -> dict:
     hop_m = hop_scale * gal["mean_spacing_pc"] * PARSEC_M
     accel = sc.acceleration_m_s2
     t_hop_s, cruise_share = mean_hop_seconds(gal, hop_scale, v, accel)
-    dwell_s = sc.dwell_years * YEAR_S
+
+    # Propellant (classical rocket equation; the relativistic correction
+    # is about one percent in the exponent at 0.2 of light speed). Each
+    # visited system costs one braking and one acceleration, a velocity
+    # change of 2 v. Hops too short to reach cruise speed cost less.
+    mass_ratio = math.exp(2.0 * sc.speed_c / sc.exhaust_speed_c)
+    refuel_s = sc.refuel_years_per_mass * (mass_ratio - 1.0) * YEAR_S
+    dwell_s = sc.dwell_years * YEAR_S + refuel_s
     t_sys_s = t_hop_s + dwell_s
 
     visited_per_probe = gal["systems"] * sc.depth / sc.probes
@@ -1000,6 +1035,18 @@ def derive(sc: Scenario, detail: bool = True) -> dict:
             str(pct): hop_scale * spacing_percentile(gal, pct / 100.0)
             for pct in (5, 50, 95)} if detail else None,
         hop_years=t_hop_s / YEAR_S,
+        propellant=dict(
+            exhaust_speed_c=sc.exhaust_speed_c,
+            mass_ratio_per_stop=mass_ratio,
+            velocity_change_per_stop_c=2.0 * sc.speed_c,
+            velocity_change_per_probe_c=(2.0 * sc.speed_c
+                                         * visited_per_probe),
+            refuel_years_per_stop=refuel_s / YEAR_S,
+            stay_years_per_system=dwell_s / YEAR_S,
+            reference=[dict(exhaust_speed_c=ve, label=label,
+                            mass_ratio_per_stop=math.exp(
+                                2.0 * sc.speed_c / ve))
+                       for ve, label in REFERENCE_EXHAUST]),
         kinematics=dict(
             acceleration_m_s2=accel,
             # time and distance spent speeding up plus slowing down
@@ -1251,10 +1298,19 @@ def flag_for(name: str) -> str:
     return name
 
 
+def fill(text: str, indent: str = "  ", first: str = None,
+         width: int = 76) -> list:
+    """Wrap text to the report width. Hyphens are not break points, so a
+    flag such as --refuel-years is never split across lines."""
+    return textwrap.wrap(text, width=width,
+                         initial_indent=indent if first is None else first,
+                         subsequent_indent=indent, break_on_hyphens=False,
+                         break_long_words=False)
+
+
 def _wrap(label: str, text: str) -> list:
     """Wrap a header entry to the report width under a 12-column label."""
-    return textwrap.wrap(text, width=76, initial_indent="%-12s" % label,
-                         subsequent_indent=" " * 12)
+    return fill(text, indent=" " * 12, first="%-12s" % label)
 
 
 def render_ranges(u: dict, canonical: bool = False) -> list:
@@ -1285,16 +1341,14 @@ def render_ranges(u: dict, canonical: bool = False) -> list:
     outside = [flag_for(row["input"]) for row in u["one_at_a_time"]
                if not row["set_value_inside"]]
     if outside:
-        lines += textwrap.wrap(
+        lines += fill(
             "the value set for %s lies outside its range, so the headline "
-            "is not a typical draw" % ", ".join(outside), width=76,
-            initial_indent="    ", subsequent_indent="    ")
-    lines += textwrap.wrap(
+            "is not a typical draw" % ", ".join(outside), indent="    ")
+    lines += fill(
         "Draws are even in the logarithm where a range is marked log and "
         "even in the value where it is marked linear. The ranges are "
         "judgments, so the interval shows how far the inputs can move the "
-        "answer; it is not a probability of anything.", width=76,
-        initial_indent="  ", subsequent_indent="  ")
+        "answer; it is not a probability of anything.")
     return lines
 
 
@@ -1317,8 +1371,7 @@ def render_defaults() -> list:
             head += "   range %s%s" % (fmt_number_span(low, high),
                                        " *" if varied else "")
         lines.append(head)
-        lines += textwrap.wrap(source, width=72, initial_indent="    ",
-                               subsequent_indent="    ")
+        lines += fill(source, indent="    ", width=72)
     return lines
 
 
@@ -1352,8 +1405,42 @@ def describe_kinematics(r: dict, canonical: bool = False) -> list:
             text += (" Cruise speed is reached on only %s of the hops; the "
                      "rest are too short and turn around halfway."
                      % percent(k["hops_reaching_cruise"]))
-    return textwrap.wrap(text, width=76, initial_indent="  ",
-                         subsequent_indent="  ")
+    return fill(text)
+
+
+def describe_propellant(r: dict, canonical: bool = False) -> list:
+    """Report lines on the propellant every stop needs."""
+    sc = r["scenario"]
+    p = r["propellant"]
+    cases = [(p["exhaust_speed_c"], p["mass_ratio_per_stop"], None)]
+    cases += [(ref["exhaust_speed_c"], ref["mass_ratio_per_stop"],
+               ref["label"]) for ref in p["reference"]
+              if ref["exhaust_speed_c"] != p["exhaust_speed_c"]]
+    labels = {ref["exhaust_speed_c"]: ref["label"] for ref in p["reference"]}
+    parts = []
+    for speed, ratio, label in cases:
+        label = label or labels.get(speed)
+        parts.append("%s times its empty mass at an exhaust speed of %s c%s"
+                     % (human_count(ratio, 2), sig(speed, 3),
+                        " (%s)" % label if label else ""))
+    text = ("Every visited system costs a velocity change of twice the "
+            "cruise speed, %s c, or %s c per probe over the survey. To pay "
+            "for it a probe must leave each system weighing %s."
+            % (sig(p["velocity_change_per_stop_c"], 3),
+               human_count(p["velocity_change_per_probe_c"], 2),
+               ", or ".join(parts)))
+    if p["refuel_years_per_stop"] > 0:
+        text += (" Gathering that propellant adds %s to every stay, which "
+                 "is then %s."
+                 % (fmt_duration(p["refuel_years_per_stop"], canonical, 3),
+                    fmt_duration(p["stay_years_per_system"], canonical, 3)))
+    else:
+        text += (" The stay of %s per system is not lengthened for this"
+                 % fmt_duration(sc["dwell_years"], canonical, 3))
+        text += ("; a faster cruise is therefore optimistic "
+                 "(--refuel-years)."
+                 if p["mass_ratio_per_stop"] > 10 else " (--refuel-years).")
+    return fill(text)
 
 
 def describe_galaxy(r: dict) -> list:
@@ -1464,7 +1551,7 @@ def render_report(r: dict, canonical: bool = False) -> str:
                  if total and not math.isinf(total) else "     ")
         add("  %-42s %s  %s" % (label, share, fmt_years(y, canonical)))
     if not r["dispersal"]["covers_any_start"]:
-        for line in textwrap.wrap(
+        for line in fill(
                 "The scattering allowance of %s is shorter than the disc "
                 "diameter (%s), the longest leg a start at the rim would "
                 "need. It only holds if the starting point is known, which "
@@ -1472,8 +1559,7 @@ def render_report(r: dict, canonical: bool = False) -> str:
                 % (fmt_kiloparsecs(r["dispersal"]["allowance_kpc"],
                                    canonical),
                    fmt_kiloparsecs(r["dispersal"]["diameter_kpc"],
-                                   canonical)),
-                width=76, initial_indent="  ", subsequent_indent="  "):
+                                   canonical))):
             add(line)
     add("")
     add("Milestones (fraction of systems surveyed)")
@@ -1492,9 +1578,11 @@ def render_report(r: dict, canonical: bool = False) -> str:
     add("  per probe:   %s" % fmt_meters(d["per_probe_m"], canonical))
     add("  fleet total: %s" % fmt_meters(d["fleet_m"], canonical))
     add("")
-    add("Stops and starts")
+    add("Stops, starts and propellant")
     add("-" * 60)
     for line in describe_kinematics(r, canonical):
+        add(line)
+    for line in describe_propellant(r, canonical):
         add(line)
     add("")
     add("Coordination traffic (optical links, Physical Layer 2.2)")
@@ -1536,7 +1624,10 @@ def render_report(r: dict, canonical: bool = False) -> str:
         add("Inputs given but not used in this run")
         add("-" * 60)
         for item in r["unused_inputs"]:
-            add("  %s: %s" % (flag_for(item["input"]), item["reason"]))
+            for line in fill("%s: %s" % (flag_for(item["input"]),
+                                         item["reason"]), indent="    ",
+                             first="  "):
+                add(line)
     add("")
     g = r["geometry"]
     add("Fleet geometry for this scenario (Physical Layer section 1)")
@@ -1685,8 +1776,18 @@ def render_explain(r: dict) -> str:
         ]
     lines += [
         "",
-        "time per system = hop time + dwell = %.4g + %.3g = %.4g years"
-        % (r["hop_years"], sc["dwell_years"], r["per_system_years"]),
+        "mass ratio per stop = exp(2 v / exhaust speed) = exp(2 x %.3g / "
+        "%.3g) = %.4g" % (sc["speed_c"], sc["exhaust_speed_c"],
+                          r["propellant"]["mass_ratio_per_stop"]),
+        "stay per system = dwell + refuel years x (mass ratio - 1)",
+        "  = %.4g + %.3g x %.4g = %.4g years"
+        % (sc["dwell_years"], sc["refuel_years_per_mass"],
+           r["propellant"]["mass_ratio_per_stop"] - 1.0,
+           r["propellant"]["stay_years_per_system"]),
+        "",
+        "time per system = hop time + stay = %.4g + %.4g = %.4g years"
+        % (r["hop_years"], r["propellant"]["stay_years_per_system"],
+           r["per_system_years"]),
         "",
         "systems per probe = total x depth / probes",
         "  = %.3g x %.3g / %s = %.4g"
@@ -1874,7 +1975,8 @@ def build_parser() -> argparse.ArgumentParser:
                    dest="dwell_years",
                    help="stay per visited system, covering both the survey "
                         "and refueling, since survey stops double as "
-                        "refueling stops (default 10)")
+                        "refueling stops (default 10); with --refuel-years "
+                        "the refueling is counted on top of it")
     g.add_argument("--path-factor", type=float, metavar="NUMBER",
                    dest="path_factor",
                    help="length of the route per visited system, as a "
@@ -1891,6 +1993,20 @@ def build_parser() -> argparse.ArgumentParser:
                         "down, and hops too short to reach cruise speed "
                         "are timed as such (no default: stops and starts "
                         "are instant)")
+    g.add_argument("--exhaust-speed", type=float, metavar="FRACTION",
+                   dest="exhaust_speed_c",
+                   help="speed of the engine exhaust as a fraction of the "
+                        "speed of light; together with the cruise speed "
+                        "it sets how much propellant every stop needs "
+                        "(default 0.089, the ideal limit for fusion of "
+                        "deuterium and helium-3)")
+    g.add_argument("--refuel-years", type=float, metavar="YEARS",
+                   dest="refuel_years_per_mass",
+                   help="years needed at a stop to gather propellant equal "
+                        "to the probe's empty mass; when given, every stay "
+                        "grows by this times the propellant the next hop "
+                        "needs, so a faster cruise costs longer stops "
+                        "(default 0: the stay is --dwell at any speed)")
     g.add_argument("--region-systems", type=float, metavar="COUNT",
                    dest="region_systems",
                    help="visited systems per completion-record region; sets "

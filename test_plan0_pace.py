@@ -969,6 +969,8 @@ class TestReportWording(unittest.TestCase):
         yield "odd explain", pp.render_explain(odd)
         for kwargs in [dict(), dict(stellar_density=0.1, systems=2e11),
                        dict(acceleration_m_s2=0.003),
+                       dict(speed_c=0.2, exhaust_speed_c=0.05,
+                            refuel_years_per_mass=1.0),
                        dict(galaxy_model="uniform", scale_length_kpc=3.0)]:
             sc = pp.Scenario(**kwargs)
             ranged = pp.derive(sc)
@@ -1119,6 +1121,101 @@ class TestStopAndGo(unittest.TestCase):
         given = " ".join(pp.render_report(pp.derive(
             pp.Scenario(acceleration_m_s2=0.01))).split())
         self.assertIn("Cruise speed is reached on only", given)
+
+
+class TestPropellant(unittest.TestCase):
+    """Audit C4: every stop costs propellant that grows fast with speed."""
+
+    def test_mass_ratio_per_stop(self):
+        # exp(2 v / exhaust speed): 3.1 and 28 at 0.05 of light speed,
+        # 90 and 6e5 at 0.2.
+        for speed, exhaust, expected in [(0.05, 0.089, 3.08),
+                                         (0.05, 0.03, 28.0),
+                                         (0.2, 0.089, 89.5),
+                                         (0.2, 0.03, 6.17e5)]:
+            r = pp.derive(pp.Scenario(speed_c=speed, exhaust_speed_c=exhaust))
+            ratio = r["propellant"]["mass_ratio_per_stop"]
+            self.assertAlmostEqual(ratio, math.exp(2 * speed / exhaust))
+            self.assertAlmostEqual(ratio / expected, 1.0, delta=0.005)
+
+    def test_default_exhaust_speed_is_the_fusion_limit(self):
+        # Deuterium plus helium-3 release 18.35 MeV from 5.030 atomic
+        # mass units of 931.494 MeV each; all of it as exhaust motion
+        # gives sqrt(2 x energy / mass) of light speed.
+        limit = math.sqrt(2 * 18.35 / (5.030 * 931.494))
+        self.assertAlmostEqual(pp.Scenario().exhaust_speed_c, limit,
+                               delta=0.0006)
+        self.assertEqual(pp.REFERENCE_EXHAUST[0][0],
+                         pp.Scenario().exhaust_speed_c)
+
+    def test_velocity_change_adds_up_over_the_survey(self):
+        # The audited fleet: 2e7 systems per probe at 0.05 of light
+        # speed is two million times light speed per probe.
+        r = pp.derive(pp.Scenario(systems=2e11))
+        p = r["propellant"]
+        self.assertAlmostEqual(p["velocity_change_per_stop_c"], 0.1)
+        self.assertAlmostEqual(p["velocity_change_per_probe_c"], 2e6)
+
+    def test_stay_is_unchanged_unless_refuelling_is_switched_on(self):
+        base = pp.derive(pp.Scenario())
+        other = pp.derive(pp.Scenario(exhaust_speed_c=0.03))
+        self.assertEqual(other["total_years"], base["total_years"])
+        self.assertEqual(base["propellant"]["refuel_years_per_stop"], 0.0)
+        self.assertEqual(base["propellant"]["stay_years_per_system"], 10.0)
+        self.assertEqual([item["input"] for item in other["unused_inputs"]],
+                         ["exhaust_speed_c"])
+        self.assertEqual(base["unused_inputs"], [])
+        used = pp.derive(pp.Scenario(exhaust_speed_c=0.03,
+                                     refuel_years_per_mass=0.5))
+        self.assertEqual(used["unused_inputs"], [])
+
+    def test_refuelling_time_grows_with_the_mass_ratio(self):
+        sc = pp.Scenario(refuel_years_per_mass=2.0)
+        r = pp.derive(sc)
+        ratio = r["propellant"]["mass_ratio_per_stop"]
+        self.assertAlmostEqual(r["propellant"]["refuel_years_per_stop"],
+                               2.0 * (ratio - 1.0))
+        self.assertAlmostEqual(r["propellant"]["stay_years_per_system"],
+                               10.0 + 2.0 * (ratio - 1.0))
+        self.assertAlmostEqual(
+            r["per_system_years"],
+            r["hop_years"] + r["propellant"]["stay_years_per_system"])
+        self.assertGreater(r["total_years"],
+                           pp.derive(pp.Scenario())["total_years"])
+
+    def test_faster_is_no_longer_a_free_win(self):
+        # Without the mode, four times the speed is 3.2 times faster.
+        plain = {v: pp.derive(pp.Scenario(speed_c=v))["total_years"]
+                 for v in (0.05, 0.1, 0.2)}
+        self.assertGreater(plain[0.05], plain[0.1])
+        self.assertGreater(plain[0.1], plain[0.2])
+        # With it, there is a best speed, and 0.2 is slower than 0.05.
+        fueled = {v: pp.derive(pp.Scenario(
+            speed_c=v, refuel_years_per_mass=1.0))["total_years"]
+            for v in (0.05, 0.1, 0.2)}
+        self.assertLess(fueled[0.1], fueled[0.05])
+        self.assertGreater(fueled[0.2], fueled[0.05])
+
+    def test_every_report_states_the_mass_ratio(self):
+        for kwargs in [dict(), dict(speed_c=0.2), dict(archives="none"),
+                       dict(refuel_years_per_mass=1.0)]:
+            text = " ".join(pp.render_report(
+                pp.derive(pp.Scenario(**kwargs))).split())
+            self.assertIn("times its empty mass at an exhaust speed of "
+                          "0.089 c", text, kwargs)
+            self.assertIn("the class of the 1978 fusion-probe study", text)
+        fast = " ".join(pp.render_report(
+            pp.derive(pp.Scenario(speed_c=0.2))).split())
+        self.assertIn("90 times its empty mass", fast)
+        self.assertIn("a faster cruise is therefore optimistic", fast)
+        self.assertNotIn("--refuel-\n", pp.render_report(
+            pp.derive(pp.Scenario(speed_c=0.2))))
+
+    def test_bad_propellant_inputs_rejected(self):
+        for bad in [dict(exhaust_speed_c=0), dict(exhaust_speed_c=1.0),
+                    dict(refuel_years_per_mass=-1)]:
+            with self.assertRaises(ValueError, msg=bad):
+                pp.derive(pp.Scenario(**bad))
 
 
 class TestScattering(unittest.TestCase):
