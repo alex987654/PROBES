@@ -259,6 +259,33 @@ class TestCommandLine(unittest.TestCase):
                 pp.Scenario(speed_c=0.2, archives="sparse"))
             self.assertEqual(result["total_years"], expected["total_years"])
 
+    def test_json_file_is_strict_when_fleet_is_exhausted(self):
+        # Audit A9: an exhausted fleet used to write the bare word
+        # Infinity, which strict parsers reject.
+        def reject(constant):
+            raise AssertionError("non-standard constant %s" % constant)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = os.path.join(tmp, "out.json")
+            code, _ = self.run_main(
+                ["--attrition", "1e-8", "--json", out_path])
+            self.assertEqual(code, 0)
+            with open(out_path, encoding="utf-8") as fh:
+                text = fh.read()
+            result = json.loads(text, parse_constant=reject)
+        self.assertNotIn("Infinity", text)
+        self.assertNotIn("NaN", text)
+        self.assertTrue(result["fleet_exhausted"])
+        self.assertIsNone(result["total_years"])
+        self.assertIsNone(result["attrition"]["survey_seconds"])
+        self.assertLess(result["attrition"]["completed_fraction"], 1.0)
+        self.assertIsNone(result["milestones"][-1]["years"])
+
+    def test_json_safe_leaves_finite_results_untouched(self):
+        result = pp.derive(pp.Scenario())
+        self.assertFalse(result["fleet_exhausted"])
+        self.assertEqual(pp.json_safe(result), result)
+
     def test_bad_scenario_file_reports_error(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "bad.json")

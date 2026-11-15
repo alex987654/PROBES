@@ -363,6 +363,7 @@ def derive(sc: Scenario) -> dict:
             archive_detours_years=detour_s / YEAR_S,
         ),
         attrition=attrition,
+        fleet_exhausted=math.isinf(total_s),
         total_years=total_s / YEAR_S,
         total_seconds=total_s,
         milestones=milestones,
@@ -608,6 +609,20 @@ def render_explain(r: dict) -> str:
     return "\n".join(lines)
 
 
+def json_safe(value):
+    """Copy of a result with every unbounded or undefined number replaced
+    by None, so the output file is strict JavaScript Object Notation
+    (which has no way to write infinity). The flag "fleet_exhausted"
+    carries the meaning the missing number had."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {key: json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(item) for item in value]
+    return value
+
+
 # ---------------------------------------------------------------------------
 # Command line
 # ---------------------------------------------------------------------------
@@ -816,7 +831,8 @@ def main(argv=None) -> int:
         print(render_report(result, canonical=args.canonical))
     if args.json_out:
         with open(args.json_out, "w", encoding="utf-8") as fh:
-            json.dump(result, fh, indent=2, default=str)
+            json.dump(json_safe(result), fh, indent=2, allow_nan=False)
+            fh.write("\n")
         print("\nfull results written to %s" % args.json_out)
     return 0
 
