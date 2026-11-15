@@ -984,6 +984,57 @@ class TestReportWording(unittest.TestCase):
             self.assertEqual(banned_tokens(text), [], label)
 
 
+class TestScattering(unittest.TestCase):
+    """Audit B2, calculator side: the wait before the survey must hold
+    for every starting point, so it cannot encode one."""
+
+    def test_default_allowance_is_the_disc_diameter(self):
+        for kwargs in [dict(), dict(disc_radius_kpc=20.0, speed_c=0.1)]:
+            sc = pp.Scenario(**kwargs)
+            r = pp.derive(sc)
+            diameter_m = 2 * sc.disc_radius_kpc * pp.KPC_M
+            self.assertAlmostEqual(
+                r["phases"]["dispersal_years"]
+                / (diameter_m / (sc.speed_c * pp.C_M_PER_S) / pp.YEAR_S),
+                1.0, places=12)
+            self.assertTrue(r["dispersal"]["covers_any_start"])
+            self.assertEqual(r["distance"]["dispersal_m"], diameter_m)
+        # 30 kiloparsecs at 0.05 of light speed: 1.96 million years.
+        self.assertAlmostEqual(
+            pp.derive(pp.Scenario())["phases"]["dispersal_years"] / 1.957e6,
+            1.0, places=3)
+
+    def test_it_covers_the_longest_leg_from_any_starting_radius(self):
+        # From a start at radius r the farthest seed is at radius + r on
+        # the far side. Sample starts across the disc, rim included.
+        sc = pp.Scenario()
+        allowance = pp.derive(sc)["dispersal"]["allowance_kpc"]
+        for step in range(0, 101):
+            start = sc.disc_radius_kpc * step / 100.0
+            self.assertLessEqual(sc.disc_radius_kpc + start, allowance)
+        # The old default (mean leg 10, margin 1.5) covered only a start
+        # at the exact center.
+        old = pp.derive(pp.Scenario(dispersal_leg_kpc=10.0,
+                                    envelope_factor=1.5))
+        self.assertAlmostEqual(old["dispersal"]["allowance_kpc"], 15.0)
+        self.assertFalse(old["dispersal"]["covers_any_start"])
+        self.assertIn("only holds if the starting point is known",
+                      " ".join(pp.render_report(old).split()))
+        self.assertNotIn("only holds if the starting point is known",
+                         " ".join(pp.render_report(pp.derive(sc)).split()))
+
+    def test_explicit_leg_and_margin_keep_working(self):
+        r = pp.derive(pp.Scenario(dispersal_leg_kpc=10.0,
+                                  envelope_factor=1.5))
+        # The figure the audit reproduced: 978 thousand years.
+        self.assertAlmostEqual(r["phases"]["dispersal_years"] / 9.785e5, 1.0,
+                               places=3)
+        wide = pp.derive(pp.Scenario(envelope_factor=2.0))
+        self.assertAlmostEqual(
+            wide["phases"]["dispersal_years"],
+            2 * pp.derive(pp.Scenario())["phases"]["dispersal_years"])
+
+
 class TestStaleness(unittest.TestCase):
     """Audit A5: every input either changes the result or is reported."""
 

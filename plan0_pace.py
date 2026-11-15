@@ -159,8 +159,9 @@ _NUMBER_RULES = {
 _WHOLE_NUMBER_FIELDS = ("probes", "station_count", "deposit_every",
                         "neighbors")
 # Inputs that may be left unset (the layout preset or the model fills in).
-_OPTIONAL_FIELDS = ("systems", "stellar_density", "cache_spacing_kpc",
-                    "detour_kpc", "station_count", "deposit_every")
+_OPTIONAL_FIELDS = ("systems", "stellar_density", "dispersal_leg_kpc",
+                    "cache_spacing_kpc", "detour_kpc", "station_count",
+                    "deposit_every")
 
 
 @dataclass
@@ -198,8 +199,13 @@ class Scenario:
     # default, an upper bound for any sensible route.
     path_factor: float = 0.78
     region_systems: float = 1000.0       # visited systems per record region
-    dispersal_leg_kpc: float = 10.0      # PROC-DSP mean leg; section 4.5
-    envelope_factor: float = 1.5         # activation-epoch margin on dispersal
+    # Scattering before the survey (Physical Layer section 4.5). No probe
+    # may start before the last one can have arrived, or the start times
+    # would point back to where the fleet set out. The only allowance that
+    # holds for every starting point is the disc diameter, so that is the
+    # default (None). A shorter leg presumes knowledge of the start.
+    dispersal_leg_kpc: Optional[float] = None
+    envelope_factor: float = 1.0         # extra margin on that allowance
     bitrate_bps: float = 0.5             # optical link; section 2.2 (0.1-1)
     message_bytes: float = 500.0         # wire-form message; Wire Format s.9
     archives: str = "full-network"
@@ -389,9 +395,11 @@ INPUT_TABLE = [
     ("region_systems", None, None, None, False,
      "assumption; the specification fixes no region size"),
     ("dispersal_leg_kpc", None, None, None, False,
-     "Physical Layer section 4.5"),
+     "the disc diameter unless given: the longest leg possible from any "
+     "starting point, so the wait does not depend on where the fleet "
+     "starts (Physical Layer section 4.5)"),
     ("envelope_factor", None, None, None, False,
-     "assumption"),
+     "no extra margin is needed on the longest possible leg"),
     ("bitrate_bps", 0.1, 1.0, "log", False,
      "link budget of Physical Layer section 2.2"),
     ("message_bytes", None, None, None, False,
@@ -842,7 +850,12 @@ def derive(sc: Scenario, detail: bool = True) -> dict:
     f_dup = min(sc.dup_cap, f_dup_raw)
 
     # Phases ----------------------------------------------------------------
-    dispersal_s = sc.dispersal_leg_kpc * KPC_M / v * sc.envelope_factor
+    # Scattering: every probe waits out the same allowance before the
+    # survey starts fleet-wide, however short its own leg was.
+    diameter_kpc = 2.0 * sc.disc_radius_kpc
+    leg_kpc = (diameter_kpc if sc.dispersal_leg_kpc is None
+               else sc.dispersal_leg_kpc)
+    dispersal_s = leg_kpc * KPC_M / v * sc.envelope_factor
     duplication_s = work_s * f_dup
     survey_s = work_s + duplication_s + detour_s
 
@@ -871,7 +884,7 @@ def derive(sc: Scenario, detail: bool = True) -> dict:
 
     # Distances -------------------------------------------------------------
     survey_path_m = visited_per_probe * hop_m * (1.0 + f_dup)
-    dispersal_m = sc.dispersal_leg_kpc * KPC_M
+    dispersal_m = leg_kpc * KPC_M       # an upper bound for any probe
     per_probe_m = dispersal_m + survey_path_m + detour_m_per_probe
     fleet_m = per_probe_m * sc.probes
 
@@ -896,6 +909,13 @@ def derive(sc: Scenario, detail: bool = True) -> dict:
         region_cycle_years=t_region_s / YEAR_S,
         staleness_years=None if math.isinf(tau_s) else tau_s / YEAR_S,
         staleness_infinite=math.isinf(tau_s),
+        dispersal=dict(
+            leg_kpc=leg_kpc, diameter_kpc=diameter_kpc,
+            allowance_kpc=leg_kpc * sc.envelope_factor,
+            # False when the allowance is shorter than the longest leg a
+            # start at the rim would need: it then depends on the start.
+            covers_any_start=(leg_kpc * sc.envelope_factor
+                              >= diameter_kpc * (1 - 1e-12))),
         staleness_parts_years={name: part / YEAR_S
                                for name, part in staleness_parts.items()},
         unused_inputs=_unused_inputs(sc, layout, gal),
@@ -1297,6 +1317,18 @@ def render_report(r: dict, canonical: bool = False) -> str:
         share = ("%5.1f%%" % (100 * y / total)
                  if total and not math.isinf(total) else "     ")
         add("  %-42s %s  %s" % (label, share, fmt_years(y, canonical)))
+    if not r["dispersal"]["covers_any_start"]:
+        for line in textwrap.wrap(
+                "The scattering allowance of %s is shorter than the disc "
+                "diameter (%s), the longest leg a start at the rim would "
+                "need. It only holds if the starting point is known, which "
+                "the plan rules out."
+                % (fmt_kiloparsecs(r["dispersal"]["allowance_kpc"],
+                                   canonical),
+                   fmt_kiloparsecs(r["dispersal"]["diameter_kpc"],
+                                   canonical)),
+                width=76, initial_indent="  ", subsequent_indent="  "):
+            add(line)
     add("")
     add("Milestones (fraction of systems surveyed)")
     add("-" * 60)
@@ -1517,12 +1549,15 @@ def render_explain(r: dict) -> str:
            sc["neighbors"]),
         "duplicated work = %.4g years" % ph["duplicated_work_years"],
         "",
-        "dispersal = leg / v x envelope = %.3g kiloparsecs -> %.4g years"
-        % (sc["dispersal_leg_kpc"], ph["dispersal_years"]),
+        "scattering = allowed leg x margin / v",
+        "  = %.4g kiloparsecs%s x %.3g / v = %.4g years"
+        % (r["dispersal"]["leg_kpc"],
+           " (the disc diameter)" if sc["dispersal_leg_kpc"] is None else "",
+           sc["envelope_factor"], ph["dispersal_years"]),
         "archive detours = deposits x 2 x detour distance / v = %.4g years"
         % ph["archive_detours_years"],
         "",
-        "TOTAL = dispersal + work x (1 + duplication) + detours",
+        "TOTAL = scattering + work x (1 + duplication) + detours",
         "      = %.4g years" % r["total_years"],
     ]
     if r.get("uncertainty"):
@@ -1686,13 +1721,16 @@ def build_parser() -> argparse.ArgumentParser:
                         "how often a probe deposits records (default 1000)")
     g.add_argument("--dispersal-leg", type=float, metavar="KILOPARSECS",
                    dest="dispersal_leg_kpc",
-                   help="mean initial scattering distance before any survey "
-                        "or message begins (default 10)")
+                   help="distance allowed for the initial scattering, "
+                        "before any survey or message begins; the default "
+                        "is the disc diameter, the longest leg possible "
+                        "from any starting point, so that the wait does "
+                        "not depend on where the fleet starts")
     g.add_argument("--envelope-factor", type=float, metavar="NUMBER",
                    dest="envelope_factor",
-                   help="margin multiplier on the scattering phase so the "
-                        "whole fleet has arrived before messages start "
-                        "(default 1.5)")
+                   help="margin multiplier on the scattering distance "
+                        "(default 1.0, since the default distance is "
+                        "already the longest possible)")
     g.add_argument("--attrition", type=float, metavar="NUMBER",
                    dest="attrition_per_year",
                    help="fraction of the fleet lost per year to failures "
