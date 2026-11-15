@@ -58,7 +58,7 @@ STRATEGIES = {
     "systems": ("as regions, but completion is recorded by system, so a "
                 "system surveyed anywhere is recognized and never visited "
                 "twice"),
-    "systems-midplane": ("as systems, with the probes working in a thin "
+    "systems-midplane": ("as systems, with the probes waiting in a thin "
                          "layer at the mid-plane of the disc, where "
                          "systems are closest together, and taking each "
                          "system as it passes through"),
@@ -662,9 +662,10 @@ def run_uncertainty(sc: Scenario, ranges: dict,
 #   The two parts are treated as separate populations. Where they overlap
 #   the true spacing is a little shorter, so this slightly overstates the
 #   route.
-#   For the strategy that works in a thin layer at the mid-plane, each
-#   system is taken as it passes through that layer, so the densities are
-#   those of the mid-plane: n0 exp(-R / L) and nb exp(-R^2 / (2 s^2)).
+#   For the strategy that waits in a thin layer at the mid-plane, each
+#   disc system is taken as it passes through that layer, so the density
+#   is that of the mid-plane, n0 exp(-R / L). The bulge is round and has
+#   no such plane: its systems are taken wherever they are.
 # uniform model
 #   one density throughout a disc of the given radius and thickness
 #
@@ -740,8 +741,8 @@ def resolve_galaxy(sc: Scenario) -> dict:
                              * 2.0 * height_pc)
     disc_spacing0 = disc_central ** (-1.0 / 3.0)
     # Mean of exp(u / 3) over systems: 9/4 g(2x/3)/g(x) from the radius,
-    # and 3/2 more from the height unless the probes work at the
-    # mid-plane only.
+    # and 3/2 more from the height unless the probes wait at the
+    # mid-plane.
     plane = sc.strategy == "systems-midplane"
     parts = [dict(
         kind="disc-plane" if plane else "disc",
@@ -758,10 +759,9 @@ def resolve_galaxy(sc: Scenario) -> dict:
         bulge_central = n_bulge / ((2.0 * math.pi) ** 1.5 * sigma_pc ** 3)
         bulge_spacing0 = bulge_central ** (-1.0 / 3.0)
         parts.append(dict(
-            kind="bulge-plane" if plane else "bulge",
-            share=sc.bulge_fraction,
+            kind="bulge", share=sc.bulge_fraction,
             central_spacing_pc=bulge_spacing0,
-            mean_spacing_pc=bulge_spacing0 * (1.5 if plane else 1.5 ** 1.5)))
+            mean_spacing_pc=bulge_spacing0 * 1.5 ** 1.5))
         gal.update(bulge_central_density=bulge_central,
                    bulge_sigma_pc=sigma_pc)
     gal.update(parts=parts, mean_spacing_pc=sum(
@@ -806,10 +806,8 @@ def spacing_cdf(gal: dict, spacing_pc: float) -> float:
             share = _disc_cdf(u, part["xm"])
         elif part["kind"] == "disc-plane":      # u = R / L alone
             share = _g1(min(u, part["xm"])) / _g1(part["xm"])
-        elif part["kind"] == "bulge":
+        else:
             share = _bulge_cdf(u)
-        else:                                   # mid-plane: u = R^2 / (2 s^2)
-            share = -math.expm1(-u)
         total += part["share"] * share
     return total
 
@@ -825,6 +823,113 @@ def spacing_percentile(gal: dict, share: float) -> float:
         else:
             high = mid
     return math.exp(high)
+
+
+# ---------------------------------------------------------------------------
+# Distance traveled where completion is recorded by system
+# ---------------------------------------------------------------------------
+#
+# No system is visited twice, but the systems still to do thin out among
+# those already done, because the stars mix long before the survey ends.
+# The functions below give the distance traveled by the time a share f of
+# the systems is surveyed, in first hops per system.
+#
+# Where all systems are equally likely to be next (a uniform disc, the
+# bulge), the density of those still to do is (1 - f) times the full one,
+# a hop is (1 - f)^(-1/3) first hops, and the distance is
+#     3/2 x (1 - (1 - f)^(2/3)),      3/2 for the whole survey.
+#
+# In a disc that thins out away from its mid-plane they are not equally
+# likely, least of all for probes that wait at the mid-plane. A star swings through the plane
+# and spends less of its time near it the wider it swings: in a disc
+# whose density falls off as exp(-|z| / h), with stars of one random
+# speed, the time near the plane goes as 1 / x, where x is the star's
+# energy of swing over the square of that speed. Wide swingers are met
+# rarely and are left for last. With a measure y of how far the survey
+# has come,
+#     share surveyed                        f = 1 - (1 + y) exp(-y)
+#     share left of those near the plane        exp(-y)
+#     distance traveled                         9/4 x g(2 y / 3)
+# and 9/4 for the whole survey, with g as in the galaxy model. The first
+# hops are shorter at the mid-plane by 2/3, and 2/3 x 9/4 = 3/2: over the
+# whole survey waiting at the mid-plane saves nothing. It brings the
+# first half of the systems sooner.
+#
+# A direct simulation of stars swinging through the plane, the probe
+# always taking the nearest unsurveyed system in a layer of 0.3 h either
+# side, gives 1.21, 1.37 and 1.45 times the distance of even thinning at
+# 50, 90 and 99 percent; the formula gives 1.25, 1.40 and 1.47 for a
+# layer of no thickness.
+#
+# A fleet spread like the systems, each probe keeping to its own band of
+# heights, starts with hops 3/2 as long as those at the mid-plane and
+# ends level with the fleet that waits there: in the same simulation it
+# needs 1.115, 1.005 and 0.990 times that fleet's distance at 50, 90 and
+# 99 percent. The factor 1 + (1 - f)^2 / 2 on the mid-plane distance
+# joins those points (1.125, 1.005, 1.000) and has the right start, 3/2.
+
+
+def _even_work(share: float) -> float:
+    """Distance traveled, in first hops per system, when a share of the
+    systems is surveyed and every system is equally likely to be next."""
+    return 1.5 * (1.0 - (1.0 - min(1.0, share)) ** (2.0 / 3.0))
+
+
+def _plane_progress(share: float) -> float:
+    """The measure y with 1 - (1 + y) exp(-y) = share surveyed."""
+    if share <= 0.0:
+        return 0.0
+    if share >= 1.0:
+        return math.inf
+    low, high = 0.0, 60.0
+    for _ in range(80):
+        mid = 0.5 * (low + high)
+        if _g1(mid) < share:
+            low = mid
+        else:
+            high = mid
+    return 0.5 * (low + high)
+
+
+def plane_left(share: float) -> float:
+    """Share of the systems near the mid-plane that are still to do when
+    a share of all systems is surveyed by probes waiting there."""
+    return math.exp(-_plane_progress(share))
+
+
+def _plane_work(share: float) -> float:
+    """As _even_work, for probes waiting at the mid-plane."""
+    y = _plane_progress(share)
+    return 2.25 if math.isinf(y) else 2.25 * _g1(2.0 * y / 3.0)
+
+
+def _spread_work(share: float) -> float:
+    """As _even_work, for probes spread through the disc like its
+    systems. Its first hops are 3/2 of those at the mid-plane."""
+    left = 1.0 - min(1.0, share)
+    return 2.0 / 3.0 * _plane_work(share) * (1.0 + 0.5 * left * left)
+
+
+def _even_growth(share: float) -> float:
+    """Length of a hop, in first hops, when a share is surveyed."""
+    return (1.0 - share) ** (-1.0 / 3.0)
+
+
+def _plane_growth(share: float) -> float:
+    return math.exp(_plane_progress(share) / 3.0)
+
+
+def _spread_growth(share: float) -> float:
+    left = 1.0 - share
+    return 2.0 / 3.0 * (_plane_growth(share) * (1.0 + 0.5 * left * left)
+                        - _plane_work(share) * left)
+
+
+# Which of the three applies to each part of the galaxy model.
+_WORK = {"disc": (_spread_work, _spread_growth),
+         "disc-plane": (_plane_work, _plane_growth),
+         "bulge": (_even_work, _even_growth),
+         "uniform": (_even_work, _even_growth)}
 
 
 # ---------------------------------------------------------------------------
@@ -885,19 +990,13 @@ def _part_hop_seconds(part: dict, hop_scale: float, v: float,
                 u = start + (i + 0.5) * du
                 m = min(u, xm)
                 add(u, math.exp(-u) * (m * m if whole else u) * du)
-    elif part["kind"] == "bulge":
-        # q = r^2 / (2 s^2) = y^2 has density proportional to
+    else:
+        # bulge: q = r^2 / (2 s^2) = y^2 has density proportional to
         # y^2 exp(-y^2)
         dy = 8.0 / steps
         for i in range(steps):
             y = (i + 0.5) * dy
             add(y * y, y * y * math.exp(-y * y))
-    else:
-        # mid-plane of the bulge: q = R^2 / (2 s^2), density exp(-q)
-        dq = 45.0 / steps
-        for i in range(steps):
-            q = (i + 0.5) * dq
-            add(q, math.exp(-q))
     # Dividing by the summed weights, not by the exact normalization,
     # keeps the shares adding up to one whatever the step size.
     return total / weights, reach / weights
@@ -1354,19 +1453,32 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
     # neighboring systems. Sampling at depth < 1 thins the visited set, so
     # the density of *visited* systems is the local density times depth
     # and every spacing stretches by depth^(-1/3).
+    #
+    # Where completion is recorded by system, no system is visited twice,
+    # but the systems still to do thin out among those already done, so
+    # the hops grow as the survey proceeds: path_share() below is the
+    # distance traveled, in first hops per system, when a share of the
+    # systems is surveyed. Only the distance grows: the time spent
+    # speeding up and slowing down stays as it is.
+    by_system = sc.strategy in RECORDS_BY_SYSTEM
     hop_scale = sc.path_factor * sc.depth ** (-1.0 / 3.0)
     hop_m = hop_scale * gal["mean_spacing_pc"] * PARSEC_M
     accel = sc.acceleration_m_s2
     first_hop_s, cruise_share = mean_hop_seconds(gal, hop_scale, v, accel)
 
-    # Where completion is recorded by system, no system is visited twice,
-    # but the systems still to do thin out among those already done (the
-    # stars mix long before the survey ends). When a share f is done a hop
-    # is (1 - f)^(-1/3) times the first hops; over the whole survey that
-    # averages to 3/2. Only the distance grows: the time spent speeding
-    # up and slowing down stays as it is.
-    by_system = sc.strategy in RECORDS_BY_SYSTEM
-    thinning = 1.5 if by_system else 1.0
+    def _over_parts(which, share):
+        return sum(part["share"] * part["mean_spacing_pc"]
+                   * _WORK[part["kind"]][which](share)
+                   for part in gal["parts"]) / gal["mean_spacing_pc"]
+
+    def path_share(share):
+        return _over_parts(0, share) if by_system else share
+
+    def hop_growth(share):
+        """Length of a hop, in first hops, when a share is surveyed."""
+        return _over_parts(1, share) if by_system else 1.0
+
+    thinning = path_share(1.0)      # mean hop of the survey in first hops
     cruise_s = hop_m / v
     ramp_s = max(0.0, first_hop_s - cruise_s)
     t_hop_s = cruise_s * thinning + ramp_s      # average over the survey
@@ -1480,8 +1592,7 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
         with the work; or systems, with hops growing as they thin out."""
         if not by_system:
             return share
-        done = (cruise_s * 1.5 * (1.0 - (1.0 - share) ** (2.0 / 3.0))
-                + (ramp_s + dwell_s) * share)
+        done = cruise_s * path_share(share) + (ramp_s + dwell_s) * share
         return done / t_sys_s
 
     milestones = []
@@ -1537,6 +1648,13 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
         # the average over the survey (longer where systems thin out)
         hop_years_average=t_hop_s / YEAR_S,
         hop_thinning=thinning,
+        # the same when half and when nine tenths of the systems are done
+        hop_growth={"0.5": hop_growth(0.5), "0.9": hop_growth(0.9)},
+        # share left of the systems near the mid-plane when half of all
+        # systems are done, where the probes wait there
+        plane_left_at_half=(plane_left(0.5) if any(
+            part["kind"] == "disc-plane" for part in gal["parts"]) and
+            by_system else None),
         propellant=dict(
             exhaust_speed_c=sc.exhaust_speed_c,
             mass_ratio_per_stop=mass_ratio,
@@ -1989,6 +2107,7 @@ def describe_reached(r: dict, canonical: bool = False) -> list:
     seen = reached["seen_after_one_pass"]
 
     if sc["strategy"] in RECORDS_BY_SYSTEM:
+        growth = r["hop_growth"]
         text = (
             "Completion is recorded by system: a probe recognizes a system "
             "that was surveyed anywhere and passes it by. No visit is "
@@ -1999,22 +2118,36 @@ def describe_reached(r: dict, canonical: bool = False) -> list:
             "the first ones when half are done, %s times at 90%%, and %s "
             "times on average."
             % (human_count(few, 2), human_count(many, 2),
-               sig(0.5 ** (-1.0 / 3.0), 3), sig(0.1 ** (-1.0 / 3.0), 3),
+               sig(growth["0.5"], 3), sig(growth["0.9"], 3),
                sig(r["hop_thinning"], 3)))
         lines = fill(text)
-        if sc["strategy"] == "systems-midplane":
+        if r["plane_left_at_half"] is not None:
             lines += fill(
-                "The probes work in a thin layer at the mid-plane of the "
+                "The probes wait in a thin layer at the mid-plane of the "
                 "disc and take each system as it passes through, which "
                 "every disc system does every few tens of millions of "
                 "years. Systems are closest together there: the first hops "
-                "are %s parsecs, against %s for systems taken wherever "
-                "they are."
+                "are %s parsecs, against %s for a fleet spread like the "
+                "systems. But a system that swings far above and below the "
+                "plane is rarely near it, and such systems are left for "
+                "last: when half of all systems are done, only %s of those "
+                "near the mid-plane are still to do. That uses up the head "
+                "start. Half of the systems are reached sooner than by a "
+                "fleet spread like the systems (--strategy systems); 90%% "
+                "and 99%% are reached at the same time, within three "
+                "percent in simulation."
                 % (sig(r["hop_parsec"], 3),
                    sig(r["hop_parsec"]
                        * r["galaxy"].get("mean_spacing_at_large_pc",
                                          r["galaxy"]["mean_spacing_pc"])
-                       / r["galaxy"]["mean_spacing_pc"], 3)))
+                       / r["galaxy"]["mean_spacing_pc"], 3),
+                   percent(r["plane_left_at_half"])))
+        elif sc["strategy"] == "systems" and r["galaxy"]["model"] != "uniform":
+            lines += fill(
+                "The probes stay spread through the disc like its systems. "
+                "Waiting at the mid-plane instead (--strategy "
+                "systems-midplane) brings the first half of the systems "
+                "sooner and the rest no sooner.")
         lines += fill(
             "The specification records completion by region. This needs a "
             "record per system, compact enough to tell it apart from every "
@@ -2105,6 +2238,10 @@ def describe_strategies(r: dict, canonical: bool = False) -> list:
             "not reached" if row["years_to_99_percent"] is None
             else fmt_duration(row["years_to_99_percent"], canonical),
             note))
+    lines += fill(
+        "The two that record by system finish together. Waiting at the "
+        "mid-plane brings the first half of the systems sooner, not the "
+        "last.")
     return lines
 
 
@@ -2603,10 +2740,8 @@ def explain_galaxy(r: dict) -> list:
             % gal["bulge_sigma_pc"],
             "  nb = bulge systems / ((2 pi)^(3/2) x s^3) = %.4g per cubic "
             "parsec" % gal["bulge_central_density"],
-            "  mean spacing over bulge systems = nb^(-1/3) x %s"
-            " = %.4g parsecs" % ("3/2 (at the mid-plane)" if plane
-                                 else "(3/2)^(3/2)",
-                                 gal["parts"][1]["mean_spacing_pc"]),
+            "  mean spacing over bulge systems = nb^(-1/3) x (3/2)^(3/2)"
+            " = %.4g parsecs" % gal["parts"][1]["mean_spacing_pc"],
         ]
     lines.append("mean spacing over all systems = %.4g parsecs"
                  % gal["mean_spacing_pc"])
@@ -2634,6 +2769,7 @@ def render_explain(r: dict) -> str:
         "",
     ]
     lines += explain_galaxy(r)
+    by_system = r["strategy"] in RECORDS_BY_SYSTEM
     lines += [
         "",
         "inter-system hop = path_factor x depth^(-1/3) x mean spacing",
@@ -2669,16 +2805,26 @@ def render_explain(r: dict) -> str:
            r["propellant"]["stay_years_per_system"]),
         "",
     ]
-    if r["hop_thinning"] > 1.0:
+    if by_system:
         lines += [
             "hops where completion is recorded by system: the systems still "
             "to do",
-            "  thin out, so a hop is (1 - share done)^(-1/3) times the "
-            "first ones,",
-            "  %.3g times on average; hop time averaged over the survey = "
-            "%.4g years" % (r["hop_thinning"], r["hop_years_average"]),
-            "",
+            "  thin out, so a hop grows to %.3g first hops when half are "
+            "done and" % r["hop_growth"]["0.5"],
+            "  %.3g at nine tenths, %.3g on average; hop time averaged over "
+            "the" % (r["hop_growth"]["0.9"], r["hop_thinning"]),
+            "  survey = %.4g years" % r["hop_years_average"],
         ]
+        if r["plane_left_at_half"] is not None:
+            lines += [
+                "  at the mid-plane, with y from 1 - (1 + y) exp(-y) = share "
+                "done:",
+                "    share left near the plane = exp(-y); distance in first "
+                "hops",
+                "    = 9/4 x g(2 y / 3); at half done, y = %.4g and %.4g is "
+                "left" % (_plane_progress(0.5), r["plane_left_at_half"]),
+            ]
+        lines += [""]
     lines += [
         "time per system = hop time + stay = %.4g + %.4g = %.4g years"
         % (r["hop_years_average"], r["propellant"]["stay_years_per_system"],

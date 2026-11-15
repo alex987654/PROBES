@@ -1404,6 +1404,83 @@ def simulate_line(sc, stars=20_000, seed=3, against_rotation=0.0,
     return seen / stars, visits / stars, end
 
 
+def simulate_midplane(stars=4000, height=12.0, layer=0.3, speed=0.1, seed=5,
+                      marks=(0.5, 0.8)):
+    """Stars swing through the mid-plane of a disc whose density falls off
+    as exp(-|z| / height); a constant pull toward the plane keeps that
+    profile. One probe keeps within `layer` x height of the plane and
+    always goes to the nearest system there that is not yet surveyed.
+    Lengths are in spacings at the mid-plane, speeds in probe speeds.
+    Returns, for each share of all systems done, the share still to do of
+    the systems then inside the layer."""
+    rng = random.Random(seed)
+    pull = speed * speed / height
+    width = layer * height
+    side = math.sqrt(stars / (2.0 * height))
+    x0 = [rng.random() * side for _ in range(stars)]
+    y0 = [rng.random() * side for _ in range(stars)]
+    vx = [rng.gauss(0.0, speed) for _ in range(stars)]
+    vy = [rng.gauss(0.0, speed) for _ in range(stars)]
+    top, half_swing, phase = [], [], []
+    for _ in range(stars):
+        z = rng.expovariate(1.0 / height)
+        v = rng.gauss(0.0, speed)                  # away from the plane
+        v_plane = math.sqrt(v * v + 2.0 * pull * z)
+        top.append(v_plane)
+        half_swing.append(2.0 * v_plane / pull)    # plane to plane
+        phase.append((v_plane - v) / pull
+                     + (half_swing[-1] if rng.random() < 0.5 else 0.0))
+    alive = list(range(stars))
+    done = [False] * stars
+    inside_at_start = None
+    here = (0.0, 0.0, 0.0)
+    clock = refresh_at = 0.0
+    count = 0
+    out = {}
+    marks = list(marks)
+    near = []
+    trail = []          # unsurveyed inside the layer / inside at the start
+    while marks:
+        if clock >= refresh_at:
+            alive = [j for j in alive if not done[j]]
+            near = []
+            for j in alive:
+                t = phase[j] + clock
+                swings = int(t / half_swing[j])
+                t -= swings * half_swing[j]
+                z = top[j] * t - 0.5 * pull * t * t
+                if z < width:
+                    near.append((j, (x0[j] + vx[j] * clock) % side,
+                                 (y0[j] + vy[j] * clock) % side,
+                                 z if swings % 2 == 0 else -z))
+            if inside_at_start is None:
+                inside_at_start = len(near)
+            trail.append(len(near) / inside_at_start)
+            refresh_at = clock + 0.5 / speed
+        best = None
+        for k, (j, x, y, z) in enumerate(near):
+            if done[j]:
+                continue
+            dx = abs(x - here[0])
+            dy = abs(y - here[1])
+            dx = min(dx, side - dx)
+            dy = min(dy, side - dy)
+            d = dx * dx + dy * dy + (z - here[2]) ** 2
+            if best is None or d < best[0]:
+                best = (d, k)
+        if best is None:
+            clock = refresh_at
+            continue
+        j, x, y, z = near[best[1]]
+        done[j] = True
+        here = (x, y, z)
+        clock += math.sqrt(best[0])
+        count += 1
+        if count >= marks[0] * stars:
+            out[marks.pop(0)] = sum(trail[-4:]) / len(trail[-4:])
+    return out
+
+
 class TestStrategies(unittest.TestCase):
     """Other ways of running the survey, compared with the specification."""
 
@@ -1461,18 +1538,32 @@ class TestStrategies(unittest.TestCase):
                                1.5 * cruise + ramp)
 
     def test_milestones_by_system_follow_the_thinning_law(self):
-        r = pp.derive(pp.Scenario(strategy="systems"))
-        scattering = r["phases"]["dispersal_years"]
-        survey = r["total_years"] - scattering
-        cruise = r["hop_years"]
-        for m in r["milestones"]:
-            share = m["fraction"]
-            work = (cruise * 1.5 * (1 - (1 - share) ** (2 / 3))
-                    + 10.0 * share) / r["per_system_years"]
-            self.assertAlmostEqual(m["years"] / (scattering + work * survey),
-                                   1.0, places=9)
-        self.assertAlmostEqual(r["milestones"][-1]["years"],
-                               r["total_years"])
+        def check(sc, path):
+            r = pp.derive(sc)
+            scattering = r["phases"]["dispersal_years"]
+            survey = r["total_years"] - scattering
+            for m in r["milestones"]:
+                share = m["fraction"]
+                work = (r["hop_years"] * path(r, share)
+                        + 10.0 * share) / r["per_system_years"]
+                self.assertAlmostEqual(
+                    m["years"] / (scattering + work * survey), 1.0, places=9)
+            self.assertAlmostEqual(r["milestones"][-1]["years"],
+                                   r["total_years"])
+            return r
+
+        def by_part(r, share):
+            gal = r["galaxy"]
+            return sum(part["share"] * part["mean_spacing_pc"]
+                       * pp._WORK[part["kind"]][0](share)
+                       for part in gal["parts"]) / gal["mean_spacing_pc"]
+
+        # One density throughout: every system is equally likely to be
+        # next, and the distance follows (1 - share)^(-1/3).
+        check(pp.Scenario(strategy="systems", galaxy_model="uniform"),
+              lambda r, share: 1.5 * (1 - (1 - share) ** (2 / 3)))
+        check(pp.Scenario(strategy="systems-midplane"), by_part)
+        r = check(pp.Scenario(strategy="systems"), by_part)
         # Half the systems take less than half the time, the last tenth
         # more than a tenth.
         half, ninety = r["milestones"][0]["years"], r["milestones"][1]["years"]
@@ -1498,8 +1589,9 @@ class TestStrategies(unittest.TestCase):
         sc = pp.Scenario(strategy="systems-midplane")
         gal = pp.derive(sc)["galaxy"]
         disc, bulge = gal["parts"]
+        # Only the disc has a mid-plane to wait at; the bulge is round.
         self.assertEqual((disc["kind"], bulge["kind"]),
-                         ("disc-plane", "bulge-plane"))
+                         ("disc-plane", "bulge"))
         scale, radius = gal["scale_length_pc"], gal["disc_radius_pc"]
         steps = 20_000
         dr = radius / steps
@@ -1511,39 +1603,137 @@ class TestStrategies(unittest.TestCase):
             bottom += r_pc * density * dr
         self.assertAlmostEqual(top / bottom / disc["mean_spacing_pc"], 1.0,
                                places=5)
-        sigma = gal["bulge_sigma_pc"]
-        dr = 12 * sigma / steps
-        top = bottom = 0.0
-        for i in range(steps):
-            r_pc = (i + 0.5) * dr
-            density = gal["bulge_central_density"] * math.exp(
-                -r_pc ** 2 / (2 * sigma ** 2))
-            top += r_pc * density ** (2 / 3) * dr
-            bottom += r_pc * density * dr
-        self.assertAlmostEqual(top / bottom / bulge["mean_spacing_pc"], 1.0,
-                               places=5)
+        plain = pp.derive(pp.Scenario(strategy="systems"))["galaxy"]
+        self.assertEqual(bulge, plain["parts"][1])
 
-    def test_mid_plane_is_denser_than_the_galaxy_at_large(self):
+    def test_waiting_at_the_mid_plane_saves_nothing_overall(self):
         plain = pp.derive(pp.Scenario(strategy="systems"))
         plane = pp.derive(pp.Scenario(strategy="systems-midplane"))
-        ratio = plane["hop_parsec"] / plain["hop_parsec"]
-        # Disc: 2/3 of the spacing; bulge: (2/3)^(1/2).
+        # The first hops are shorter: 2/3 of the spacing in the disc.
         self.assertAlmostEqual(
             plane["galaxy"]["parts"][0]["mean_spacing_pc"]
             / plain["galaxy"]["parts"][0]["mean_spacing_pc"], 2 / 3)
-        self.assertAlmostEqual(
-            plane["galaxy"]["parts"][1]["mean_spacing_pc"]
-            / plain["galaxy"]["parts"][1]["mean_spacing_pc"],
-            math.sqrt(2 / 3))
-        self.assertAlmostEqual(ratio, 0.68, delta=0.005)
+        self.assertAlmostEqual(plane["hop_parsec"] / plain["hop_parsec"],
+                               0.70, delta=0.005)
         self.assertAlmostEqual(
             plane["galaxy"]["mean_spacing_at_large_pc"],
             plain["galaxy"]["mean_spacing_pc"])
-        self.assertLess(plane["total_years"], plain["total_years"])
+        # They grow faster, by 9/4 against 3/2 over the whole survey, and
+        # 2/3 x 9/4 = 3/2: the whole survey takes as long either way.
+        self.assertAlmostEqual(plane["total_years"] / plain["total_years"],
+                               1.0, places=12)
+        self.assertAlmostEqual(plane["hop_years_average"],
+                               plain["hop_years_average"])
+        self.assertGreater(plane["hop_thinning"], plain["hop_thinning"])
+        # Half of the systems come sooner; 90 and 99 percent do not.
+        sooner = [a["years"] / b["years"] for a, b in zip(
+            plane["reached"]["rows"], plain["reached"]["rows"])]
+        self.assertAlmostEqual(sooner[0], 0.91, delta=0.02)
+        self.assertAlmostEqual(sooner[1], 1.0, delta=0.01)
+        self.assertAlmostEqual(sooner[2], 1.0, delta=0.001)
+        self.assertAlmostEqual(plane["plane_left_at_half"], 0.187,
+                               delta=0.001)
+        self.assertIsNone(plain["plane_left_at_half"])
         # A uniform disc is as dense at the mid-plane as anywhere.
         flat = [pp.derive(pp.Scenario(strategy=name, galaxy_model="uniform"))
                 for name in ("systems", "systems-midplane")]
         self.assertEqual(flat[0]["total_years"], flat[1]["total_years"])
+        self.assertEqual(flat[0]["milestones"], flat[1]["milestones"])
+        self.assertIsNone(flat[1]["plane_left_at_half"])
+
+    def test_mid_plane_law_from_the_motion_of_the_stars(self):
+        # A star in a constant pull toward the plane, turning at height
+        # x, spends 1 - sqrt(1 - w / x) of its time below w: w / (2 x)
+        # for a thin layer.
+        for x in (0.5, 2.0, 6.0):
+            below = 0
+            steps = 100_000
+            for i in range(steps):
+                t = (i + 0.5) / steps           # plane to turning point
+                if x * (2 * t - t * t) < 0.01:
+                    below += 1
+            self.assertAlmostEqual(below / steps / (0.01 / (2 * x)), 1.0,
+                                   delta=0.01)
+        # Stars of one random speed have x spread as sqrt(x) exp(-x).
+        # Each is surveyed at a rate that goes as 1 / x, so after a while
+        # the share exp(-s / x) of them is left. Summed over the stars
+        # that gives the two shares of the formula, with y = 2 sqrt(s).
+        def over_stars(weight):
+            total = 0.0
+            for i in range(20_000):             # x = t^2 keeps it smooth
+                t = (i + 0.5) * 3e-4
+                total += (4 / math.sqrt(math.pi) * t * t * math.exp(-t * t)
+                          * weight(t * t) * 3e-4)
+            return total
+        self.assertAlmostEqual(over_stars(lambda x: 1.0), 1.0, places=6)
+        self.assertAlmostEqual(over_stars(lambda x: 1.0 / x), 2.0, places=6)
+        for s in (0.05, 0.7, 3.8, 11.0):
+            y = 2 * math.sqrt(s)
+            left = over_stars(lambda x: math.exp(-s / x))
+            near = over_stars(lambda x: math.exp(-s / x) / x) / 2.0
+            self.assertAlmostEqual(left / ((1 + y) * math.exp(-y)), 1.0,
+                                   places=5)
+            self.assertAlmostEqual(near / math.exp(-y), 1.0, places=5)
+            self.assertAlmostEqual(pp._plane_progress(1 - left), y, places=4)
+            self.assertAlmostEqual(pp.plane_left(1 - left) / near, 1.0,
+                                   places=4)
+
+    def test_mid_plane_distance_is_the_sum_of_its_hops(self):
+        # A hop is (share left near the plane)^(-1/3) first hops.
+        for share in (0.5, 0.9, 0.99):
+            steps = 20_000
+            total = sum(pp.plane_left((i + 0.5) * share / steps) ** (-1 / 3)
+                        for i in range(steps)) * share / steps
+            self.assertAlmostEqual(total / pp._plane_work(share), 1.0,
+                                   places=3)
+            self.assertAlmostEqual(
+                pp._plane_growth(share),
+                pp.plane_left(share) ** (-1 / 3))
+        self.assertEqual(pp._plane_work(0.0), 0.0)
+        self.assertEqual(pp._plane_work(1.0), 2.25)
+        self.assertEqual(pp.plane_left(0.0), 1.0)
+        self.assertEqual(pp.plane_left(1.0), 0.0)
+        self.assertAlmostEqual(pp._plane_work(1e-4) / 1e-4, 1.0, delta=0.01)
+        # Against even thinning: 1.25, 1.40 and 1.47 times the distance.
+        for share, ratio in ((0.5, 1.25), (0.9, 1.40), (0.99, 1.47)):
+            self.assertAlmostEqual(
+                pp._plane_work(share) / pp._even_work(share), ratio,
+                delta=0.005)
+
+    def test_mid_plane_law_against_a_direct_simulation(self):
+        # Full-size runs (100,000 systems, a layer of 0.3 scale heights
+        # either side): 0.228 of the systems near the plane left when half
+        # of all are done, 0.025 at 90 percent; distance 1.205, 1.372 and
+        # 1.447 times that of a slab in which every system is equally
+        # exposed, at 50, 90 and 99 percent. This is a small one.
+        left = simulate_midplane()
+        self.assertAlmostEqual(left[0.5], pp.plane_left(0.5), delta=0.07)
+        self.assertAlmostEqual(left[0.8], pp.plane_left(0.8), delta=0.03)
+        # Far less than the half and the fifth that even thinning leaves.
+        self.assertLess(left[0.5], 0.3)
+        self.assertLess(left[0.8], 0.1)
+
+    def test_fleet_spread_like_the_systems(self):
+        # First hops 3/2 of those at the mid-plane, the same distance in
+        # the end, and in between the ratios of the full-size simulation
+        # (eight probes, each in its own band of heights, against one at
+        # the mid-plane): 1.115, 1.005 and 0.990 at 50, 90 and 99 percent.
+        self.assertEqual(pp._spread_work(0.0), 0.0)
+        self.assertAlmostEqual(pp._spread_work(1.0), 1.5)
+        self.assertAlmostEqual(pp._spread_work(1e-4) / 1e-4, 1.0, delta=0.01)
+        for share, simulated in ((0.5, 1.115), (0.9, 1.005), (0.99, 0.990)):
+            ratio = pp._spread_work(share) / (2 / 3 * pp._plane_work(share))
+            self.assertAlmostEqual(ratio, simulated, delta=0.015)
+        # Each growth is the slope of its distance.
+        for work, growth in pp._WORK.values():
+            previous = 0.0
+            for share in (0.1, 0.5, 0.9, 0.99):
+                slope = (work(share + 1e-6) - work(share - 1e-6)) / 2e-6
+                self.assertAlmostEqual(slope / growth(share), 1.0, places=5)
+                self.assertGreater(work(share), previous)
+                previous = work(share)
+        self.assertEqual(set(pp._WORK),
+                         {"disc", "disc-plane", "bulge", "uniform"})
 
     def test_mid_plane_distribution_is_consistent(self):
         sc = pp.Scenario(strategy="systems-midplane")
@@ -1724,12 +1914,11 @@ class TestStrategies(unittest.TestCase):
     def test_ranking_for_the_default_fleet(self):
         rows = {row["strategy"]: row
                 for row in pp.derive(pp.Scenario())["strategies"]}
-        years = [rows[name]["years_to_99_percent"] for name in pp.STRATEGIES]
-        self.assertEqual(years, sorted(years, reverse=True))
-        # 5.3, 3.9, 1.6 and 1.1 billion years.
+        # 5.3, 3.9, 1.6 and 1.6 billion years: recording by system is
+        # what counts, not where the probes wait.
         for name, expected in (("regions", 5.26e9), ("sweep-line", 3.93e9),
-                               ("systems", 1.58e9),
-                               ("systems-midplane", 1.11e9)):
+                               ("systems", 1.558e9),
+                               ("systems-midplane", 1.558e9)):
             self.assertAlmostEqual(rows[name]["years_to_99_percent"]
                                    / expected, 1.0, delta=0.01, msg=name)
         self.assertAlmostEqual(rows["regions"]["seen_after_one_pass"], 0.632,
