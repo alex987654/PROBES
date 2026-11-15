@@ -1448,6 +1448,16 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
     dispersal_s = leg_seconds(leg_kpc * KPC_M, v, accel) * sc.envelope_factor
     duplication_s = work_s * f_dup
     survey_s = work_s + duplication_s + detour_s
+    # A line held while the disc turns cannot be swept faster than the
+    # disc turns: every stretch has to stay staffed for one turn, and the
+    # rim takes longest. A fleet large enough to finish its work sooner
+    # waits out the rest of that turn.
+    line_wait_s = 0.0
+    if sc.strategy == "sweep-line":
+        rim_turn_s = (2.0 * math.pi * sc.disc_radius_kpc * KPC_M
+                      / ROTATION_SPEED_M_S)
+        line_wait_s = max(0.0, rim_turn_s - survey_s)
+        survey_s += line_wait_s
 
     # Attrition: solve for the survey time in which the decaying fleet
     # accumulates the required probe-seconds of work.
@@ -1579,6 +1589,7 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
             survey_work_years=work_s / YEAR_S,
             duplicated_work_years=duplication_s / YEAR_S,
             archive_detours_years=detour_s / YEAR_S,
+            line_wait_years=line_wait_s / YEAR_S,
         ),
         attrition=attrition,
         fleet_exhausted=math.isinf(total_s),
@@ -2355,8 +2366,11 @@ def render_report(r: dict, canonical: bool = False) -> str:
                        ("survey travel + dwell", "survey_work_years"),
                        ("duplicated work (stale knowledge)",
                         "duplicated_work_years"),
-                       ("archive deposit detours", "archive_detours_years")]:
+                       ("archive deposit detours", "archive_detours_years"),
+                       ("waiting for the disc to turn", "line_wait_years")]:
         y = ph[key]
+        if key == "line_wait_years" and y == 0:
+            continue
         share = ("%5.1f%%" % (100 * y / total)
                  if total and not math.isinf(total) else "     ")
         add("  %-42s %s  %s" % (label, share, fmt_years(y, canonical)))
@@ -2714,7 +2728,9 @@ def render_explain(r: dict) -> str:
         % (r["attrition"]["threshold_per_year"],
            r["attrition"]["mean_life_needed_years"]),
         "",
-        "TOTAL = scattering + work x (1 + duplication) + detours",
+        "TOTAL = scattering + work x (1 + duplication) + detours%s"
+        % (" + wait for one turn of the rim"
+           if ph["line_wait_years"] > 0 else ""),
         "      = %.4g years" % r["total_years"],
     ]
     if r.get("uncertainty"):

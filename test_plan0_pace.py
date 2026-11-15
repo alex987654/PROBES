@@ -1650,6 +1650,29 @@ class TestStrategies(unittest.TestCase):
         # with, so the work is the same.
         self.assertAlmostEqual(moving[1], still[1], delta=0.03)
 
+    def test_a_sweep_cannot_outrun_the_turning_disc(self):
+        # A fleet that could finish its visits sooner still has to keep
+        # every stretch staffed for one turn, and the rim takes longest.
+        rim_turn = (2 * math.pi * 15 * pp.KPC_M / pp.ROTATION_SPEED_M_S
+                    / pp.YEAR_S)
+        self.assertAlmostEqual(rim_turn / 4.01e8, 1.0, delta=0.005)
+        small = pp.derive(pp.Scenario(strategy="sweep-line"))
+        self.assertEqual(small["phases"]["line_wait_years"], 0.0)
+        self.assertNotIn("waiting for the disc to turn",
+                         pp.render_report(small))
+        big = pp.derive(pp.Scenario(strategy="sweep-line", probes=200_000))
+        self.assertGreater(big["phases"]["line_wait_years"], 0.0)
+        self.assertAlmostEqual(
+            (big["total_years"] - big["phases"]["dispersal_years"])
+            / rim_turn, 1.0, places=9)
+        self.assertAlmostEqual(
+            sum(big["phases"].values()) / big["total_years"], 1.0)
+        self.assertIn("waiting for the disc to turn", pp.render_report(big))
+        # The same fleet working by regions is not held up.
+        regions = pp.derive(pp.Scenario(probes=200_000))
+        self.assertLess(regions["total_years"], big["total_years"])
+        self.assertEqual(regions["phases"]["line_wait_years"], 0.0)
+
     def test_sweeps_needed(self):
         r = pp.derive(pp.Scenario(strategy="sweep-line"))
         reached, line = r["reached"], r["reached"]["line"]
