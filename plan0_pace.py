@@ -45,6 +45,26 @@ DEFAULT_SYSTEMS = 1.0e11
 
 GALAXY_MODELS = ("exponential", "uniform")
 
+# Ways to run the survey. "regions" is the specification as it stands; the
+# others change how the fleet moves or what it records, and are here to be
+# compared with it.
+STRATEGIES = {
+    "regions": ("as the specification stands: the fleet spreads over the "
+                "disc and each probe surveys one region after another; "
+                "completion is recorded by region"),
+    "sweep-line": ("the fleet works along a line held from the galactic "
+                   "center to the rim while the disc turns past it; a "
+                   "system is surveyed when it crosses the line"),
+    "systems": ("as regions, but completion is recorded by system, so a "
+                "system surveyed anywhere is recognized and never visited "
+                "twice"),
+    "systems-midplane": ("as systems, with the probes working in a thin "
+                         "layer at the mid-plane of the disc, where "
+                         "systems are closest together, and taking each "
+                         "system as it passes through"),
+}
+RECORDS_BY_SYSTEM = ("systems", "systems-midplane")
+
 # Beyond this duration the galaxy itself rotates, shears and forms stars
 # on the timescale of the survey, none of which the model follows; any
 # longer result is a scale estimate and is labeled so at the headline.
@@ -57,6 +77,10 @@ LINK_REFERENCE_M = 8.0e18
 # Figures used only to put numbers on what the model leaves out.
 ROTATION_SPEED_M_S = 2.3e5              # orbital speed, similar at all radii
 RANDOM_SPEEDS_M_S = (2.0e4, 6.0e4)      # stars relative to their neighbors
+# Random speed of disc stars toward and away from the center. It makes
+# every star swing in and out around its mean distance, by about a tenth
+# of that distance.
+RADIAL_RANDOM_SPEED_M_S = 3.5e4
 # New stars per year as a share of the stars that exist: 1.65 solar masses
 # per year on 6.08e10 (Licquia and Newman 2015). A share, so that it holds
 # for any system count.
@@ -247,6 +271,7 @@ class Scenario:
     bitrate_bps: float = 0.5             # optical link; section 2.2 (0.1-1)
     message_bytes: float = 500.0         # wire-form message; Wire Format s.9
     archives: str = "full-network"
+    strategy: str = "regions"            # see STRATEGIES
     cache_spacing_kpc: Optional[float] = None   # overrides preset
     detour_kpc: Optional[float] = None          # overrides preset
     station_count: Optional[int] = None         # derives spacing + detour
@@ -307,6 +332,10 @@ class Scenario:
         if self.galaxy_model not in GALAXY_MODELS:
             raise ValueError("unknown galaxy model %r (choices: %s)"
                              % (self.galaxy_model, ", ".join(GALAXY_MODELS)))
+        if (not isinstance(self.strategy, str)
+                or self.strategy not in STRATEGIES):
+            raise ValueError("unknown strategy %r (choices: %s)"
+                             % (self.strategy, ", ".join(STRATEGIES)))
         if (not isinstance(self.archives, str)
                 or self.archives not in ARCHIVE_PRESETS):
             raise ValueError("unknown archive layout %r (choices: %s)"
@@ -455,6 +484,9 @@ INPUT_TABLE = [
      "Physical Layer section 2.2"),
     ("archives", None, None, None, False,
      "the doctrine layout (Physical Layer section 3)"),
+    ("strategy", None, None, None, False,
+     "the specification: probes spread over the disc, completion "
+     "recorded by region (README section 3.2)"),
     ("cache_spacing_kpc", None, None, None, False,
      "set by the archive layout"),
     ("detour_kpc", None, None, None, False,
@@ -630,6 +662,9 @@ def run_uncertainty(sc: Scenario, ranges: dict,
 #   The two parts are treated as separate populations. Where they overlap
 #   the true spacing is a little shorter, so this slightly overstates the
 #   route.
+#   For the strategy that works in a thin layer at the mid-plane, each
+#   system is taken as it passes through that layer, so the densities are
+#   those of the mid-plane: n0 exp(-R / L) and nb exp(-R^2 / (2 s^2)).
 # uniform model
 #   one density throughout a disc of the given radius and thickness
 #
@@ -704,10 +739,15 @@ def resolve_galaxy(sc: Scenario) -> dict:
     disc_central = n_disc / (2.0 * math.pi * scale_pc ** 2 * _g1(xm)
                              * 2.0 * height_pc)
     disc_spacing0 = disc_central ** (-1.0 / 3.0)
+    # Mean of exp(u / 3) over systems: 9/4 g(2x/3)/g(x) from the radius,
+    # and 3/2 more from the height unless the probes work at the
+    # mid-plane only.
+    plane = sc.strategy == "systems-midplane"
     parts = [dict(
-        kind="disc", share=1.0 - sc.bulge_fraction, xm=xm,
+        kind="disc-plane" if plane else "disc",
+        share=1.0 - sc.bulge_fraction, xm=xm,
         central_spacing_pc=disc_spacing0,
-        mean_spacing_pc=(disc_spacing0 * 27.0 / 8.0
+        mean_spacing_pc=(disc_spacing0 * (9.0 / 4.0 if plane else 27.0 / 8.0)
                          * _g1(2.0 * xm / 3.0) / _g1(xm)))]
     gal.update(scale_length_pc=scale_pc, scale_height_pc=height_pc,
                disc_systems=n_disc, disc_central_density=disc_central,
@@ -718,13 +758,20 @@ def resolve_galaxy(sc: Scenario) -> dict:
         bulge_central = n_bulge / ((2.0 * math.pi) ** 1.5 * sigma_pc ** 3)
         bulge_spacing0 = bulge_central ** (-1.0 / 3.0)
         parts.append(dict(
-            kind="bulge", share=sc.bulge_fraction,
+            kind="bulge-plane" if plane else "bulge",
+            share=sc.bulge_fraction,
             central_spacing_pc=bulge_spacing0,
-            mean_spacing_pc=bulge_spacing0 * 1.5 ** 1.5))
+            mean_spacing_pc=bulge_spacing0 * (1.5 if plane else 1.5 ** 1.5)))
         gal.update(bulge_central_density=bulge_central,
                    bulge_sigma_pc=sigma_pc)
     gal.update(parts=parts, mean_spacing_pc=sum(
         part["share"] * part["mean_spacing_pc"] for part in parts))
+    # The same without the restriction to the mid-plane, for comparison.
+    gal["mean_spacing_at_large_pc"] = (
+        (1.0 - sc.bulge_fraction) * disc_spacing0 * 27.0 / 8.0
+        * _g1(2.0 * xm / 3.0) / _g1(xm)
+        + (sc.bulge_fraction * bulge_spacing0 * 1.5 ** 1.5
+           if n_bulge > 0.0 else 0.0))
     return gal
 
 
@@ -755,9 +802,15 @@ def spacing_cdf(gal: dict, spacing_pc: float) -> float:
             continue
         # spacing = central spacing x exp(u / 3)
         u = 3.0 * math.log(spacing_pc / part["central_spacing_pc"])
-        total += part["share"] * (_disc_cdf(u, part["xm"])
-                                  if part["kind"] == "disc"
-                                  else _bulge_cdf(u))
+        if part["kind"] == "disc":
+            share = _disc_cdf(u, part["xm"])
+        elif part["kind"] == "disc-plane":      # u = R / L alone
+            share = _g1(min(u, part["xm"])) / _g1(part["xm"])
+        elif part["kind"] == "bulge":
+            share = _bulge_cdf(u)
+        else:                                   # mid-plane: u = R^2 / (2 s^2)
+            share = -math.expm1(-u)
+        total += part["share"] * share
     return total
 
 
@@ -807,36 +860,44 @@ def _part_hop_seconds(part: dict, hop_scale: float, v: float,
     shortest_m = hop_scale * part["central_spacing_pc"] * PARSEC_M
     ramp_m = v * v / acceleration
     total = reach = weights = 0.0
-    if part["kind"] == "disc":
-        # u = R / L + |z| / h has density proportional to
-        # exp(-u) min(u, xm)^2
-        # The density has a corner at u = xm, so each side of it gets
-        # its own grid of midpoints.
+
+    def add(u, weight):
+        nonlocal total, reach, weights
+        d = shortest_m * math.exp(u / 3.0)
+        weights += weight
+        total += weight * leg_seconds(d, v, acceleration)
+        if d >= ramp_m:
+            reach += weight
+
+    if part["kind"] in ("disc", "disc-plane"):
+        # Whole disc: u = R / L + |z| / h has density proportional to
+        # exp(-u) min(u, xm)^2. Mid-plane: u = R / L, density u exp(-u)
+        # up to xm. Either has a corner at u = xm, so each side of it
+        # gets its own grid of midpoints.
         xm = part["xm"]
-        for start, stop, count in ((0.0, xm, steps // 3),
-                                   (xm, xm + 45.0, steps)):
+        whole = part["kind"] == "disc"
+        spans = [(0.0, xm, steps // 3)]
+        if whole:
+            spans.append((xm, xm + 45.0, steps))
+        for start, stop, count in spans:
             du = (stop - start) / count
             for i in range(count):
                 u = start + (i + 0.5) * du
                 m = min(u, xm)
-                weight = math.exp(-u) * m * m * du
-                d = shortest_m * math.exp(u / 3.0)
-                weights += weight
-                total += weight * leg_seconds(d, v, acceleration)
-                if d >= ramp_m:
-                    reach += weight
-    else:
+                add(u, math.exp(-u) * (m * m if whole else u) * du)
+    elif part["kind"] == "bulge":
         # q = r^2 / (2 s^2) = y^2 has density proportional to
         # y^2 exp(-y^2)
         dy = 8.0 / steps
         for i in range(steps):
             y = (i + 0.5) * dy
-            weight = y * y * math.exp(-y * y)
-            d = shortest_m * math.exp(y * y / 3.0)
-            weights += weight
-            total += weight * leg_seconds(d, v, acceleration)
-            if d >= ramp_m:
-                reach += weight
+            add(y * y, y * y * math.exp(-y * y))
+    else:
+        # mid-plane of the bulge: q = R^2 / (2 s^2), density exp(-q)
+        dq = 45.0 / steps
+        for i in range(steps):
+            q = (i + 0.5) * dq
+            add(q, math.exp(-q))
     # Dividing by the summed weights, not by the exact normalization,
     # keeps the shares adding up to one whatever the step size.
     return total / weights, reach / weights
@@ -943,31 +1004,182 @@ def share_seen(changes_per_pass: float, passes: float = 1.0,
     return 1.0 - missed_once ** passes
 
 
-def passes_for_share(share: float, changes_per_pass: float,
-                     depth: float = 1.0) -> float:
-    """Passes over every region needed before the given share of all
-    systems has been visited at least once (infinite if out of reach)."""
+def _passes_for(seen, share: float) -> float:
+    """Passes (or sweeps) after which `seen(passes)` first reaches the
+    given share; infinite if it is out of reach."""
     low, high = 0.0, 1.0
-    while share_seen(changes_per_pass, high, depth) < share:
+    while seen(high) < share:
         low, high = high, high * 2.0
         if high > 1e6:
             return math.inf
     for _ in range(100):
         mid = 0.5 * (low + high)
-        if share_seen(changes_per_pass, mid, depth) < share:
+        if seen(mid) < share:
             low = mid
         else:
             high = mid
     return high
 
 
+def passes_for_share(share: float, changes_per_pass: float,
+                     depth: float = 1.0) -> float:
+    """Passes over every region needed before the given share of all
+    systems has been visited at least once (infinite if out of reach)."""
+    return _passes_for(
+        lambda passes: share_seen(changes_per_pass, passes, depth), share)
+
+
+# ---------------------------------------------------------------------------
+# A line held while the disc turns past it
+# ---------------------------------------------------------------------------
+#
+# The disc turns, so every disc system crosses a line that runs from the
+# galactic center to the rim, at rest, once per turn. If the fleet works
+# along such a line and surveys what comes through, "done" needs no record
+# of any system or region: a stretch of the line is done when it has been
+# staffed for one turn.
+#
+# The fleet is far too small to staff the whole line (the stars cross it
+# faster than the probes can survey them), so it staffs a stretch at a
+# time, each for one turn, working inward. The stretch at a given distance
+# from the center has the width w that brings stars through as fast as the
+# fleet can deal with them, and it moves inward by w per turn.
+#
+# Stars also swing in and out around their mean distance from the center,
+# by a = about a tenth of that distance. A star therefore crosses the line
+# at a slightly different distance each turn, and may cross outside the
+# staffed stretch every time (missed) or inside it twice. With successive
+# crossings meeting successive "tiles" of width w, a star of swing a is
+# missed with the probability
+#     missed(q) = mean over tile offsets of the product of (1 - p_j),
+#     q = 2 a / w,   p_j = share of its crossings that fall into tile j,
+# which rises from 0 (narrow swing) to exp(-1) (swing much wider than the
+# staffed stretch). Against a simulation that follows each star's swing
+# turn by turn this is a few percent too hopeful; counting the swing 1.5
+# times closes the gap to within 0.02 for fleets of 1,000 to 150,000
+# probes. Moving the line against the rotation does not help a fleet this
+# size: the stars arrive sooner, but in proportion more of them per year,
+# so the staffed stretch is shorter.
+
+LINE_SWING_CALIBRATION = 1.5
+_LINE_TABLE = []
+
+
+def _tile_missed(q: float, offsets: int = 16) -> float:
+    """Share missed by a staffed stretch of width w = 2a / q (see above)."""
+    def below(c):               # share of crossings with cos(phase) < c
+        return 0.0 if c <= -1.0 else 1.0 if c >= 1.0 \
+            else 1.0 - math.acos(c) / math.pi
+    width = 2.0 / q             # in units of the swing a
+    total = 0.0
+    for i in range(offsets):
+        edge = -1.0 - width * (i + 0.5) / offsets
+        product = 1.0
+        while edge < 1.0:
+            product *= 1.0 - (below(edge + width) - below(edge))
+            edge += width
+        total += product
+    return total / offsets
+
+
+def line_missed(q: float) -> float:
+    """Share of systems that one sweep of the line misses, for a swing of
+    q staffed widths. Read from a table built on first use."""
+    if q <= 0.0:
+        return 0.0
+    if not _LINE_TABLE:
+        for step in range(53):                  # q from 0.01 to 200
+            value = 10.0 ** (-2.0 + step / 12.0)
+            _LINE_TABLE.append((math.log(value), _tile_missed(value)))
+    x = math.log(q)
+    if x <= _LINE_TABLE[0][0]:
+        return _LINE_TABLE[0][1] * q / math.exp(_LINE_TABLE[0][0])
+    if x >= _LINE_TABLE[-1][0]:
+        last = _LINE_TABLE[-1][1]
+        return math.exp(-1.0) - (math.exp(-1.0) - last) * math.exp(
+            _LINE_TABLE[-1][0]) / q
+    position = (x - _LINE_TABLE[0][0]) * 12.0 / math.log(10.0)
+    index = min(int(position), len(_LINE_TABLE) - 2)
+    weight = position - index
+    return ((1.0 - weight) * _LINE_TABLE[index][1]
+            + weight * _LINE_TABLE[index + 1][1])
+
+
+def line_seen(missed: float, sweeps: float, depth: float = 1.0) -> float:
+    """Share of the line's systems seen at least once after so many
+    sweeps, each of which misses the given share."""
+    reach = depth * (1.0 - missed)
+    if sweeps < 1.0:
+        return reach * max(0.0, sweeps)
+    return 1.0 - (1.0 - reach) ** sweeps
+
+
+def sweep_line(sc: Scenario, gal: dict, per_system_years: float) -> dict:
+    """The line strategy for this fleet: how fast systems cross the line,
+    what the fleet can deal with, and the share one sweep misses."""
+    radius_pc = gal["disc_radius_pc"]
+    speed = ROTATION_SPEED_M_S * YEAR_S / PARSEC_M          # parsecs a year
+    if gal["model"] == "uniform":
+        on_line = gal["systems"]
+        level = on_line / (math.pi * radius_pc ** 2)        # per square parsec
+
+        def surface(r_pc):
+            return level
+        crossings = level * radius_pc * speed
+    else:
+        # The disc turns in step; the bulge does not, and stays with the
+        # regions.
+        on_line = gal["disc_systems"]
+        scale = gal["scale_length_pc"]
+        xm = radius_pc / scale
+        level = on_line / (2.0 * math.pi * scale ** 2 * _g1(xm))
+
+        def surface(r_pc):
+            return level * math.exp(-r_pc / scale)
+        crossings = level * scale * -math.expm1(-xm) * speed
+    share = on_line / gal["systems"]
+    # Systems a year the fleet can survey on the line, and how many cross
+    # that it sets out to visit.
+    capacity = sc.probes / per_system_years * share
+    wanted = crossings * sc.depth
+    swing_per_pc = RADIAL_RANDOM_SPEED_M_S / (math.sqrt(2.0)
+                                              * ROTATION_SPEED_M_S)
+    steps, quantiles = 60, 6
+    missed = weights = 0.0
+    for i in range(steps):
+        r_pc = (i + 0.5) * radius_pc / steps
+        weight = surface(r_pc) * r_pc
+        width = capacity / (surface(r_pc) * sc.depth * speed)
+        for j in range(quantiles):
+            # swings are spread around their typical size (Rayleigh law)
+            swing = swing_per_pc * r_pc * math.sqrt(
+                -2.0 * math.log(1.0 - (j + 0.5) / quantiles))
+            missed += weight / quantiles * max(
+                line_missed(LINE_SWING_CALIBRATION * 2.0 * swing / width),
+                # even a fully staffed line misses a few: a star that
+                # swings inward turns faster than its stretch stays open
+                min(1.0, swing / (math.pi * r_pc)))
+        weights += weight
+    return dict(
+        share_of_systems=share,
+        crossings_per_year=crossings,
+        capacity_per_year=capacity,
+        staffed_share=min(1.0, capacity / wanted),
+        probes_to_staff_all=sc.probes * wanted / capacity,
+        missed_per_sweep=missed / weights,
+        rim_turn_years=2.0 * math.pi * radius_pc / speed)
+
+
 REACHED_SHARES = (0.5, 0.9, 0.99)
 
 
-def systems_reached(sc: Scenario, side_pc: float, dispersal_s: float,
-                    survey_s: float) -> dict:
-    """What passes over the fixed-volume regions reach while the stars
-    drift through them. `side_pc` is the size of one region."""
+def systems_reached(sc: Scenario, gal: dict, side_pc: float,
+                    dispersal_s: float, survey_s: float,
+                    per_system_years: float, work_share) -> dict:
+    """What the chosen way of running the survey reaches. `side_pc` is the
+    size of one region; `work_share(share)` is the part of the whole
+    survey's work done when that share of the systems is surveyed (used
+    where completion is recorded by system)."""
     # Time for a system to cross one region at each random speed, and
     # how often it does so during one pass.
     crossing_years = [side_pc * PARSEC_M / speed / YEAR_S
@@ -975,29 +1187,61 @@ def systems_reached(sc: Scenario, side_pc: float, dispersal_s: float,
     changes = [survey_s / YEAR_S / years for years in crossing_years]
     # The slower speed mixes least; it is used so as not to overstate.
     least = min(changes)
-    seen_once = share_seen(least, 1.0, sc.depth)
-    rows = []
-    for share in REACHED_SHARES:
-        passes = passes_for_share(share, least, sc.depth)
-        seconds = (None if math.isinf(passes) else
-                   _survey_time_for_fraction(sc, dispersal_s, survey_s,
-                                             passes))
-        rows.append(dict(
-            systems_seen=share, passes=passes,
-            years=(None if seconds is None
-                   else (dispersal_s + seconds) / YEAR_S)))
-    return dict(
+    out = dict(
+        strategy=sc.strategy,
         region_side_parsec=side_pc,
         crossing_years=crossing_years,
         region_changes_per_pass=changes,
         # the same at the full orbital speed: how fast stars stream
         # through a volume that does not turn with them
         stream_crossing_years=(side_pc * PARSEC_M / ROTATION_SPEED_M_S
-                               / YEAR_S),
-        seen_after_one_pass=seen_once,
-        # visits of one pass that go to systems already seen
-        repeat_visit_share=1.0 - seen_once / sc.depth,
-        rows=rows)
+                               / YEAR_S))
+
+    def years_after(work):
+        seconds = (None if math.isinf(work) else
+                   _survey_time_for_fraction(sc, dispersal_s, survey_s, work))
+        return None if seconds is None else (dispersal_s + seconds) / YEAR_S
+
+    if sc.strategy in RECORDS_BY_SYSTEM:
+        # Every visit is to a new system; the survey ends when all the
+        # systems it set out to visit are done.
+        rows = []
+        for share in REACHED_SHARES:
+            reachable = share <= sc.depth * (1.0 + 1e-12)
+            rows.append(dict(
+                systems_seen=share, passes=None,
+                years=(years_after(work_share(min(1.0, share / sc.depth)))
+                       if reachable else None)))
+        out.update(unit=None, seen_after_one_pass=sc.depth,
+                   repeat_visit_share=0.0, rows=rows)
+        return out
+
+    if sc.strategy == "sweep-line":
+        line = sweep_line(sc, gal, per_system_years)
+        out.update(line=line, unit="sweep")
+
+        def seen(passes):
+            return (line["share_of_systems"]
+                    * line_seen(line["missed_per_sweep"], passes, sc.depth)
+                    + (1.0 - line["share_of_systems"])
+                    * share_seen(least, passes, sc.depth))
+    else:
+        out.update(unit="pass")
+
+        def seen(passes):
+            return share_seen(least, passes, sc.depth)
+
+    seen_once = seen(1.0)
+    rows = []
+    for share in REACHED_SHARES:
+        passes = _passes_for(seen, share)
+        rows.append(dict(systems_seen=share, passes=passes,
+                         years=years_after(passes)))
+    out.update(seen_after_one_pass=seen_once,
+               # visits of one pass that go to systems already seen
+               repeat_visit_share=1.0 - seen_once / sc.depth,
+               rows=rows)
+    return out
 
 
 def central_load_factor(sc: Scenario, gal: dict) -> float:
@@ -1094,11 +1338,12 @@ def _unused_inputs(sc: Scenario, layout: dict, gal: dict) -> list:
 # ---------------------------------------------------------------------------
 
 
-def derive(sc: Scenario, detail: bool = True) -> dict:
+def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
     """Compute the pace estimate. Pure function of the scenario; returns a
     dict holding every intermediate quantity (for --explain and --json).
-    detail=False skips the hop-length percentiles, the one costly extra,
-    for the many repeated runs of the uncertainty mode."""
+    detail=False skips the extras that only the report needs, for the
+    many repeated runs of the uncertainty mode. (_compare is internal: it
+    stops the comparison of strategies from calling itself.)"""
     sc.validate()
     layout = resolve_layout(sc)
     gal = resolve_galaxy(sc)
@@ -1112,7 +1357,19 @@ def derive(sc: Scenario, detail: bool = True) -> dict:
     hop_scale = sc.path_factor * sc.depth ** (-1.0 / 3.0)
     hop_m = hop_scale * gal["mean_spacing_pc"] * PARSEC_M
     accel = sc.acceleration_m_s2
-    t_hop_s, cruise_share = mean_hop_seconds(gal, hop_scale, v, accel)
+    first_hop_s, cruise_share = mean_hop_seconds(gal, hop_scale, v, accel)
+
+    # Where completion is recorded by system, no system is visited twice,
+    # but the systems still to do thin out among those already done (the
+    # stars mix long before the survey ends). When a share f is done a hop
+    # is (1 - f)^(-1/3) times the first hops; over the whole survey that
+    # averages to 3/2. Only the distance grows: the time spent speeding
+    # up and slowing down stays as it is.
+    by_system = sc.strategy in RECORDS_BY_SYSTEM
+    thinning = 1.5 if by_system else 1.0
+    cruise_s = hop_m / v
+    ramp_s = max(0.0, first_hop_s - cruise_s)
+    t_hop_s = cruise_s * thinning + ramp_s      # average over the survey
 
     # Propellant (classical rocket equation; the relativistic correction
     # is about one percent in the exponent at 0.2 of light speed). Each
@@ -1207,9 +1464,20 @@ def derive(sc: Scenario, detail: bool = True) -> dict:
         fleet_left_at_end=(0.0 if math.isinf(total_s) else math.exp(
             -sc.attrition_per_year * total_s / YEAR_S)))
 
+    def work_share(share):
+        """Part of the whole survey's work done when this share of what
+        the milestones count is surveyed: regions (or the line), in step
+        with the work; or systems, with hops growing as they thin out."""
+        if not by_system:
+            return share
+        done = (cruise_s * 1.5 * (1.0 - (1.0 - share) ** (2.0 / 3.0))
+                + (ramp_s + dwell_s) * share)
+        return done / t_sys_s
+
     milestones = []
     for frac in MILESTONE_FRACTIONS:
-        t_frac = _survey_time_for_fraction(sc, dispersal_s, survey_s, frac)
+        t_frac = _survey_time_for_fraction(sc, dispersal_s, survey_s,
+                                           work_share(frac))
         milestones.append(dict(
             fraction=frac,
             years=None if t_frac is None else (dispersal_s + t_frac) / YEAR_S))
@@ -1237,7 +1505,7 @@ def derive(sc: Scenario, detail: bool = True) -> dict:
                       * gal["mean_spacing_pc"])
 
     # Distances -------------------------------------------------------------
-    survey_path_m = visited_per_probe * hop_m * (1.0 + f_dup)
+    survey_path_m = visited_per_probe * hop_m * thinning * (1.0 + f_dup)
     dispersal_m = leg_kpc * KPC_M       # an upper bound for any probe
     per_probe_m = dispersal_m + survey_path_m + detour_m_per_probe
     fleet_m = per_probe_m * sc.probes
@@ -1254,7 +1522,11 @@ def derive(sc: Scenario, detail: bool = True) -> dict:
         hop_percentiles_parsec={
             str(pct): hop_scale * spacing_percentile(gal, pct / 100.0)
             for pct in (5, 50, 95)} if detail else None,
-        hop_years=t_hop_s / YEAR_S,
+        # the first hops, among systems none of which is surveyed yet
+        hop_years=first_hop_s / YEAR_S,
+        # the average over the survey (longer where systems thin out)
+        hop_years_average=t_hop_s / YEAR_S,
+        hop_thinning=thinning,
         propellant=dict(
             exhaust_speed_c=sc.exhaust_speed_c,
             mass_ratio_per_stop=mass_ratio,
@@ -1273,7 +1545,7 @@ def derive(sc: Scenario, detail: bool = True) -> dict:
             ramp_years=0.0 if accel is None else v / accel / YEAR_S,
             ramp_parsec=0.0 if accel is None else v * v / accel / PARSEC_M,
             hops_reaching_cruise=cruise_share,
-            extra_hop_fraction=t_hop_s / (hop_m / v) - 1.0,
+            extra_hop_fraction=first_hop_s / (hop_m / v) - 1.0,
             # what standard accelerations would add to the mean hop time
             reference=[dict(
                 acceleration_m_s2=a,
@@ -1322,10 +1594,27 @@ def derive(sc: Scenario, detail: bool = True) -> dict:
             link_seconds_per_message=link_s_per_message,
             link_years_per_probe=link_s_per_probe / YEAR_S,
         ),
-        # Milestones count regions surveyed; this block says what share
-        # of the systems that reaches while they drift between regions.
-        reached=systems_reached(sc, region_side_pc, dispersal_s,
-                                survey_s) if detail else None,
+        strategy=sc.strategy,
+        # What the milestones count: regions, the line, or systems.
+        milestones_count=("systems" if by_system else
+                          "line" if sc.strategy == "sweep-line"
+                          else "regions"),
+        # What share of the systems the chosen way of running the survey
+        # reaches, and how long 50, 90 and 99 percent take.
+        reached=systems_reached(
+            sc, gal, region_side_pc, dispersal_s, survey_s,
+            t_sys_s / YEAR_S, work_share) if detail or not _compare
+        else None,
+        # The same for every way of running the survey, side by side.
+        strategies=[dict(
+            strategy=name,
+            seen_after_one_pass=other["reached"]["seen_after_one_pass"],
+            years_to_99_percent=other["reached"]["rows"][-1]["years"],
+            one_pass_years=other["total_years"])
+            for name, other in (
+                (name, derive(replace(sc, strategy=name), detail=False,
+                              _compare=False)) for name in STRATEGIES)]
+        if detail and _compare else None,
         left_out=left_out(
             sc, gal, (dispersal_s + survey_s) / YEAR_S, t_region_s / YEAR_S,
             region_side_pc, dwell_s / YEAR_S,
@@ -1661,9 +1950,24 @@ def describe_kinematics(r: dict, canonical: bool = False) -> list:
     return fill(text)
 
 
+def _reached_table(reached: dict, canonical: bool) -> list:
+    """The rows 'share of systems seen, passes, time'."""
+    unit = reached["unit"]
+    lines = ["    %-30s %-9s %s" % ("systems seen at least once",
+                                    unit + ("es" if unit == "pass" else "s"),
+                                    "time")]
+    for row in reached["rows"]:
+        lines.append("    %-30s %-9s %s" % (
+            "%.0f%%" % (100 * row["systems_seen"]),
+            "never" if math.isinf(row["passes"]) else sig(row["passes"], 2),
+            "not reached" if row["years"] is None
+            else fmt_duration(row["years"], canonical)))
+    return lines
+
+
 def describe_reached(r: dict, canonical: bool = False) -> list:
-    """Report lines on the share of the systems that passes over the
-    fixed-volume regions reach while the stars drift through them."""
+    """Report lines on the share of the systems that the chosen way of
+    running the survey reaches."""
     reached = r["reached"]
     sc = r["scenario"]
     slow, fast = max(reached["crossing_years"]), min(reached["crossing_years"])
@@ -1672,6 +1976,82 @@ def describe_reached(r: dict, canonical: bool = False) -> list:
     speeds = "%s to %s kilometers per second" % (
         sig(RANDOM_SPEEDS_M_S[0] / 1e3, 2), sig(RANDOM_SPEEDS_M_S[1] / 1e3, 2))
     seen = reached["seen_after_one_pass"]
+
+    if sc["strategy"] in RECORDS_BY_SYSTEM:
+        text = (
+            "Completion is recorded by system: a probe recognizes a system "
+            "that was surveyed anywhere and passes it by. No visit is "
+            "repeated, and the milestones count systems. The price is "
+            "longer hops. The stars mix long before the survey ends (a "
+            "system changes region %s to %s times), so the systems still "
+            "to do thin out among those already done: a hop is %s times "
+            "the first ones when half are done, %s times at 90%%, and %s "
+            "times on average."
+            % (human_count(few, 2), human_count(many, 2),
+               sig(0.5 ** (-1.0 / 3.0), 3), sig(0.1 ** (-1.0 / 3.0), 3),
+               sig(r["hop_thinning"], 3)))
+        lines = fill(text)
+        if sc["strategy"] == "systems-midplane":
+            lines += fill(
+                "The probes work in a thin layer at the mid-plane of the "
+                "disc and take each system as it passes through, which "
+                "every disc system does every few tens of millions of "
+                "years. Systems are closest together there: the first hops "
+                "are %s parsecs, against %s for systems taken wherever "
+                "they are."
+                % (sig(r["hop_parsec"], 3),
+                   sig(r["hop_parsec"]
+                       * r["galaxy"].get("mean_spacing_at_large_pc",
+                                         r["galaxy"]["mean_spacing_pc"])
+                       / r["galaxy"]["mean_spacing_pc"], 3)))
+        lines += fill(
+            "The specification records completion by region. This needs a "
+            "record per system, compact enough to tell it apart from every "
+            "other, that every archive station holds.")
+        return lines
+
+    if sc["strategy"] == "sweep-line":
+        line = reached["line"]
+        whole = line["share_of_systems"] >= 1.0 - 1e-12
+        text = (
+            "The disc turns, so every %ssystem crosses a line held from "
+            "the center to the rim once per turn (%s at the rim). Systems "
+            "cross it at %s a year, %s times what the fleet can survey, so "
+            "the fleet staffs a stretch of the line at a time, each for "
+            "one turn, working inward. Stars also swing in and out by "
+            "about a tenth of their distance from the center: some cross "
+            "outside the staffed stretch every time and are missed, others "
+            "are met twice. One sweep of the line reaches %s of %s."
+            % ("" if whole else "disc ",
+               fmt_duration(line["rim_turn_years"], canonical),
+               human_count(line["crossings_per_year"], 2),
+               sig(1.0 / line["staffed_share"], 2)
+               if line["staffed_share"] < 1.0 else "not more than",
+               percent(sc["depth"] * (1.0 - line["missed_per_sweep"])),
+               "the systems" if whole else "the disc systems"))
+        if not whole:
+            text += (
+                " The bulge does not turn in step; it is surveyed by "
+                "regions, as in the specification. Together one sweep "
+                "reaches %s of all systems, and %s of its visits go to "
+                "systems already seen."
+                % (percent(seen), percent(reached["repeat_visit_share"])))
+        lines = fill(text) + _reached_table(reached, canonical)
+        lines += fill(
+            "Staffing the whole line at once would take %s probes. Moving "
+            "the line against the rotation brings the stars past sooner, "
+            "but in proportion more of them per year, so this fleet could "
+            "staff only a shorter stretch: nothing is gained."
+            % human_count(line["probes_to_staff_all"], 2))
+        lines += fill(
+            "The archive layout, the staleness and the side trips in this "
+            "report still describe a fleet spread over the disc; along a "
+            "line they would be smaller. A sweep is counted as taking as "
+            "long as one pass; a real schedule cannot keep every probe "
+            "busy between stretches and runs 5 to 15 percent longer in "
+            "simulation.")
+        return lines
+
     if seen >= 0.995 * sc["depth"]:
         return fill(
             "Stars barely move during a survey this short: at %s a system "
@@ -1688,19 +2068,32 @@ def describe_reached(r: dict, canonical: bool = False) -> list:
         % (speeds, fmt_span(fast, slow, canonical), human_count(few, 2),
            human_count(many, 2), percent(seen),
            percent(reached["repeat_visit_share"])))
-    lines.append("    %-30s %-9s %s" % ("systems seen at least once",
-                                        "passes", "time"))
-    for row in reached["rows"]:
-        lines.append("    %-30s %-9s %s" % (
-            "%.0f%%" % (100 * row["systems_seen"]),
-            "never" if math.isinf(row["passes"]) else sig(row["passes"], 2),
-            "not reached" if row["years"] is None
-            else fmt_duration(row["years"], canonical)))
+    lines += _reached_table(reached, canonical)
     lines += fill(
         "A further pass needs the completion records of the one before to "
         "lapse. As the specification stands a finished region stays "
         "finished, and the fleet stops after one pass. Nothing lets a probe "
         "recognize a system that was surveyed in another region.")
+    return lines
+
+
+def describe_strategies(r: dict, canonical: bool = False) -> list:
+    """Every way of running the survey side by side, for this scenario."""
+    lines = []
+    for row in r["strategies"]:
+        if row["strategy"] in RECORDS_BY_SYSTEM:
+            note = "every visit is to a new system"
+        else:
+            note = "one %s reaches %s" % (
+                "sweep" if row["strategy"] == "sweep-line" else "pass",
+                percent(row["seen_after_one_pass"]))
+        if row["strategy"] == r["strategy"]:
+            note += " (this run)"
+        lines.append("  %-18s %-20s %s" % (
+            row["strategy"],
+            "not reached" if row["years_to_99_percent"] is None
+            else fmt_duration(row["years_to_99_percent"], canonical),
+            note))
     return lines
 
 
@@ -1734,25 +2127,35 @@ def describe_left_out(r: dict, canonical: bool = False) -> list:
         "Deep time. The survey lasts %s turns of the galaxy at half the "
         "disc radius, and two points on neighboring orbits there drift "
         "apart by their own separation every %s, so the archive network "
-        "does not hold still. Regions are fixed volumes and the stars move "
-        "through them: while one region is surveyed (%s) the random motion "
-        "of stars, %s to %s kilometers per second, replaces %s to %s of its "
-        "systems. In the Galactic Standard Frame, which turns with one "
-        "beacon, stars at other distances from the center also stream "
-        "through, at up to the orbital speed of %s kilometers per second, "
-        "which replaces the whole content of a region in %s. A finished "
-        "volume does not stay finished; \"Systems reached\" above gives "
-        "what that costs. About %s as many systems as are counted today "
-        "form during the survey."
+        "does not hold still."
         % (sig(out["turns_at_half_radius"], 2),
-           fmt_duration(out["shear_years"], canonical),
-           fmt_duration(r["region_cycle_years"], canonical),
-           sig(RANDOM_SPEEDS_M_S[0] / 1e3, 2),
-           sig(RANDOM_SPEEDS_M_S[1] / 1e3, 2),
-           percent(low), percent(high),
-           sig(ROTATION_SPEED_M_S / 1e3, 2),
-           fmt_duration(r["reached"]["stream_crossing_years"], canonical),
-           percent(out["new_system_share"])))
+           fmt_duration(out["shear_years"], canonical)))
+    drift = (fmt_duration(r["region_cycle_years"], canonical),
+             sig(RANDOM_SPEEDS_M_S[0] / 1e3, 2),
+             sig(RANDOM_SPEEDS_M_S[1] / 1e3, 2), percent(low), percent(high))
+    if r["strategy"] == "regions":
+        deep += (
+            " Regions are fixed volumes and the stars move through them: "
+            "while one region is surveyed (%s) the random motion of stars, "
+            "%s to %s kilometers per second, replaces %s to %s of its "
+            "systems." % drift)
+        deep += (
+            " In the Galactic Standard Frame, which turns with one beacon, "
+            "stars at other distances from the center also stream through, "
+            "at up to the orbital speed of %s kilometers per second, which "
+            "replaces the whole content of a region in %s. A finished "
+            "volume does not stay finished; \"Systems reached\" above "
+            "gives what that costs."
+            % (sig(ROTATION_SPEED_M_S / 1e3, 2),
+               fmt_duration(r["reached"]["stream_crossing_years"],
+                            canonical)))
+    else:
+        deep += (
+            " The stars move as well: in the time one region takes (%s) "
+            "their random motion, %s to %s kilometers per second, replaces "
+            "%s to %s of the systems in a volume of that size." % drift)
+    deep += (" About %s as many systems as are counted today form during "
+             "the survey." % percent(out["new_system_share"]))
     scattering = (
         "Scattering. Counted as one uninterrupted cruise, although "
         "Physical Layer 6.1 has probes refuel at stars. A stop every %s "
@@ -1893,11 +2296,16 @@ def render_report(r: dict, canonical: bool = False) -> str:
         add(line)
     add("Workload:   survey depth %.3g -> %s systems per probe,"
         % (sc["depth"], human_count(r["visited_per_probe"])))
-    add("            %.3g years per system" % r["per_system_years"])
+    add("            %.3g years per system%s"
+        % (r["per_system_years"],
+           " on average" if r["hop_thinning"] > 1.0 else ""))
     for line in _wrap("Archives:", "%s - %s" % (layout["name"],
                                                 layout["description"])):
         add(line)
     for line in _wrap("", "(%s)" % layout["spec_note"]):
+        add(line)
+    for line in _wrap("Strategy:", "%s - %s" % (r["strategy"],
+                                                STRATEGIES[r["strategy"]])):
         add(line)
     add("")
     if r["fleet_exhausted"]:
@@ -1921,11 +2329,13 @@ def render_report(r: dict, canonical: bool = False) -> str:
         add(line)
     reached = r["reached"]
     if reached["seen_after_one_pass"] < 0.995 * sc["depth"]:
-        for line in _wrap("", "that is one pass over every region; stars "
-                              "drift between regions meanwhile, so it "
-                              "reaches about %s of the systems (see Systems "
-                              "reached)"
-                          % percent(reached["seen_after_one_pass"])):
+        text = ("that is one sweep of the line from the rim to the center; "
+                "it" if r["strategy"] == "sweep-line" else
+                "that is one pass over every region; stars drift between "
+                "regions meanwhile, so it")
+        for line in _wrap("", "%s reaches about %s of the systems (see "
+                              "Systems reached)"
+                          % (text, percent(reached["seen_after_one_pass"]))):
             add(line)
     if r["scale_estimate"] and not r["fleet_exhausted"]:
         for line in _wrap("", "a scale estimate only: past %s the galaxy "
@@ -1962,15 +2372,25 @@ def render_report(r: dict, canonical: bool = False) -> str:
                                    canonical))):
             add(line)
     add("")
-    add("Milestones (share of regions surveyed)")
+    add("Milestones (share of %s)"
+        % {"regions": "regions surveyed", "line": "the line swept",
+           "systems": "systems surveyed"}[r["milestones_count"]])
     add("-" * 60)
     for m in r["milestones"]:
         add("  %4.0f%%   %s" % (100 * m["fraction"],
                                 fmt_years(m["years"], canonical, digits=2)))
     add("")
-    add("Systems reached (regions are fixed volumes; stars drift through)")
+    add("Systems reached (%s)"
+        % {"regions": "regions are fixed volumes; stars drift through",
+           "line": "a line held while the disc turns past it",
+           "systems": "completion recorded by system"}[r["milestones_count"]])
     add("-" * 60)
     for line in describe_reached(r, canonical):
+        add(line)
+    add("")
+    add("Ways to run the survey (--strategy), until 99% of systems are seen")
+    add("-" * 60)
+    for line in describe_strategies(r, canonical):
         add(line)
     if u:
         add("")
@@ -2147,10 +2567,20 @@ def explain_galaxy(r: dict) -> list:
         "       g(x) = 1 - exp(-x) x (1 + x) = %.4g" % _g1(xm),
         "     = %.4g per cubic parsec at the center"
         % gal["disc_central_density"],
-        "  mean spacing over disc systems"
-        " = n0^(-1/3) x (27/8) x g(2x/3) / g(x)",
-        "     = %.4g parsecs" % gal["parts"][0]["mean_spacing_pc"],
     ]
+    plane = gal["parts"][0]["kind"] == "disc-plane"
+    if plane:
+        lines += [
+            "  taken at the mid-plane, where the density is n0 x exp(-R / L):",
+            "  mean spacing over disc systems"
+            " = n0^(-1/3) x (9/4) x g(2x/3) / g(x)",
+        ]
+    else:
+        lines += [
+            "  mean spacing over disc systems"
+            " = n0^(-1/3) x (27/8) x g(2x/3) / g(x)",
+        ]
+    lines.append("     = %.4g parsecs" % gal["parts"][0]["mean_spacing_pc"])
     if gal["bulge_sigma_pc"]:
         lines += [
             "bulge: %.4g systems, density nb x exp(-r^2 / (2 s^2)),"
@@ -2159,8 +2589,10 @@ def explain_galaxy(r: dict) -> list:
             % gal["bulge_sigma_pc"],
             "  nb = bulge systems / ((2 pi)^(3/2) x s^3) = %.4g per cubic "
             "parsec" % gal["bulge_central_density"],
-            "  mean spacing over bulge systems = nb^(-1/3) x (3/2)^(3/2)"
-            " = %.4g parsecs" % gal["parts"][1]["mean_spacing_pc"],
+            "  mean spacing over bulge systems = nb^(-1/3) x %s"
+            " = %.4g parsecs" % ("3/2 (at the mid-plane)" if plane
+                                 else "(3/2)^(3/2)",
+                                 gal["parts"][1]["mean_spacing_pc"]),
         ]
     lines.append("mean spacing over all systems = %.4g parsecs"
                  % gal["mean_spacing_pc"])
@@ -2182,6 +2614,7 @@ def render_explain(r: dict) -> str:
     lines = [
         "FORMULAS WITH SUBSTITUTED VALUES",
         "=" * 60,
+        "strategy: %s" % r["strategy"],
         "cruise speed  v = %.3g x speed of light = %.4g meters per second"
         % (sc["speed_c"], r["speed_m_per_s"]),
         "",
@@ -2221,8 +2654,20 @@ def render_explain(r: dict) -> str:
            r["propellant"]["mass_ratio_per_stop"] - 1.0,
            r["propellant"]["stay_years_per_system"]),
         "",
+    ]
+    if r["hop_thinning"] > 1.0:
+        lines += [
+            "hops where completion is recorded by system: the systems still "
+            "to do",
+            "  thin out, so a hop is (1 - share done)^(-1/3) times the "
+            "first ones,",
+            "  %.3g times on average; hop time averaged over the survey = "
+            "%.4g years" % (r["hop_thinning"], r["hop_years_average"]),
+            "",
+        ]
+    lines += [
         "time per system = hop time + stay = %.4g + %.4g = %.4g years"
-        % (r["hop_years"], r["propellant"]["stay_years_per_system"],
+        % (r["hop_years_average"], r["propellant"]["stay_years_per_system"],
            r["per_system_years"]),
         "",
         "systems per probe = total x depth / probes",
@@ -2274,6 +2719,27 @@ def render_explain(r: dict) -> str:
     ]
     if r.get("uncertainty"):
         lines += [""] + render_ranges(r["uncertainty"])
+    if r["strategy"] == "sweep-line":
+        line = r["reached"]["line"]
+        lines += [
+            "",
+            "line held while the disc turns past it",
+            "  systems crossing = surface density x orbital speed, summed "
+            "along the line",
+            "    = %.4g a year; the fleet can survey %.4g a year there"
+            % (line["crossings_per_year"], line["capacity_per_year"]),
+            "  staffed share of the line = %.4g; probes to staff all of "
+            "it = %.4g" % (line["staffed_share"],
+                           line["probes_to_staff_all"]),
+            "  staffed width at each distance = fleet capacity / (surface "
+            "density",
+            "    x orbital speed); swing of a star = radial random speed x "
+            "distance",
+            "    / (sqrt(2) x orbital speed), counted %.3g times"
+            % LINE_SWING_CALIBRATION,
+            "  share of the line's systems missed by one sweep = %.4g"
+            % line["missed_per_sweep"],
+        ]
     lines += [""] + render_defaults()
     return "\n".join(lines)
 
@@ -2319,6 +2785,9 @@ _EPILOG = """\
 archive layouts (--archives NAME):
 %s
 
+ways to run the survey (--strategy NAME):
+%s
+
 what the output shows:
   A headline duration, a phase-by-phase breakdown, milestone times for
   half, ninety percent, ninety-nine percent, and all of the regions, the
@@ -2357,6 +2826,8 @@ examples:
       default with its source and plausible range
   python plan0_pace.py --uncertainty
       add the interval that the plausible input ranges give
+  python plan0_pace.py --strategy systems-midplane
+      another way of running the survey; every report compares them all
   python plan0_pace.py --scenario my.json --json out.json
       load assumptions from a file, write full results to a file
 """
@@ -2369,7 +2840,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="plan0_pace.py",
         description=_DESCRIPTION,
-        epilog=_EPILOG % preset_lines,
+        epilog=_EPILOG % (preset_lines, "\n".join(
+            "\n".join(fill(text, indent=" " * 21,
+                           first="  %-18s " % name, width=78))
+            for name, text in STRATEGIES.items())),
         formatter_class=argparse.RawDescriptionHelpFormatter)
 
     g = p.add_argument_group("fleet and survey assumptions")
@@ -2476,6 +2950,11 @@ def build_parser() -> argparse.ArgumentParser:
                    dest="attrition_per_year",
                    help="fraction of the fleet lost per year to failures "
                         "(default 0)")
+
+    g.add_argument("--strategy", choices=list(STRATEGIES), metavar="NAME",
+                   help="way of running the survey; see the list below "
+                        "(default regions, the specification as it "
+                        "stands)")
 
     g = p.add_argument_group("archives and communication")
     g.add_argument("--archives", choices=sorted(ARCHIVE_PRESETS),
