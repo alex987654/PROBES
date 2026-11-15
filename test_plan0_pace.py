@@ -33,6 +33,26 @@ class TestConstants(unittest.TestCase):
     def test_kiloparsec_is_thousand_parsecs(self):
         self.assertAlmostEqual(pp.KPC_M / pp.PARSEC_M, 1000.0)
 
+    def test_light_year_is_light_speed_times_one_year(self):
+        self.assertAlmostEqual(
+            pp.C_M_PER_S * pp.YEAR_S / pp.LIGHT_YEAR_M, 1.0, places=14)
+        self.assertEqual(pp.YEAR_S, 365.25 * 86_400)
+        self.assertEqual(pp.C_M_PER_S, 299_792_458.0)
+
+    def test_parsec_follows_from_the_astronomical_unit(self):
+        # One parsec is 648000 / pi astronomical units of 149,597,870,700
+        # meters each (the definition, not a measurement).
+        self.assertAlmostEqual(
+            149_597_870_700.0 * 648_000.0 / math.pi / pp.PARSEC_M, 1.0,
+            places=14)
+
+    def test_report_prefixes_are_powers_of_a_thousand(self):
+        self.assertEqual(pp.si_quantity(2.5e12, "second"), "2.5 teraseconds")
+        self.assertEqual(pp.si_quantity(9.5e16, "second"), "95 petaseconds")
+        self.assertEqual(pp.si_quantity(1.5e7, "meter"), "15 megameters")
+        self.assertEqual(pp.human_count(2.0e7), "20 million")
+        self.assertEqual(pp.human_count(1.42e12), "1.42 trillion")
+
     def test_parsec_in_light_years(self):
         self.assertAlmostEqual(pp.PARSEC_M / pp.LIGHT_YEAR_M, 3.2616, places=3)
 
@@ -161,6 +181,151 @@ class TestModel(unittest.TestCase):
 def parse(argv):
     """Scenario exactly as the command line would build it."""
     return pp.scenario_from_args(pp.build_parser().parse_args(argv))
+
+
+class TestIdentities(unittest.TestCase):
+    """Audit A10: pin what the model computes, not what it printed."""
+
+    def assertSame(self, first, second, msg=None):
+        """Equal to twelve digits; the values span many magnitudes."""
+        self.assertAlmostEqual(first / second, 1.0, places=12, msg=msg)
+
+    # Inputs spelled out so that no later change of a default can move
+    # this check; they are the values the audit was run against.
+    AUDITED = dict(systems=2e11, stellar_density=0.1, path_factor=1.0,
+                   dispersal_leg_kpc=10.0, envelope_factor=1.5,
+                   consolidation_years=1e4, cache_spacing_kpc=0.27)
+
+    def test_headline_from_first_principles(self):
+        sc = pp.Scenario(**self.AUDITED)
+        r = pp.derive(sc)
+        year = 365.25 * 86_400.0
+        light_year = 299_792_458.0 * year
+        parsec = 149_597_870_700.0 * 648_000.0 / math.pi
+        speed = 0.05 * 299_792_458.0
+        hop_years = 0.1 ** (-1.0 / 3.0) * parsec / speed / year
+        per_system = hop_years + 10.0
+        per_probe = 2e11 / 10_000
+        work = per_probe * per_system
+        region_cycle = 1000.0 * per_system
+        staleness = region_cycle + 1e4 + 270.0 * parsec / light_year
+        duplication = staleness / region_cycle * 6 / (per_probe / 1000.0)
+        dispersal = 10_000.0 * parsec / speed / year * 1.5
+        detours = (per_probe / 1000.0) * 2 * 10.0 * parsec / speed / year
+        total = dispersal + work * (1 + duplication) + detours
+        self.assertAlmostEqual(r["hop_years"] / hop_years, 1.0, places=12)
+        self.assertAlmostEqual(r["hop_parsec"], 2.1544, places=4)
+        self.assertAlmostEqual(r["duplication_fraction"] / duplication, 1.0,
+                               places=12)
+        self.assertAlmostEqual(r["total_years"] / total, 1.0, places=12)
+        # The figure the audit reproduced, to the three digits it quoted.
+        self.assertAlmostEqual(r["total_years"] / 1e9, 3.04, places=2)
+        self.assertAlmostEqual(r["phases"]["survey_work_years"] / 1e9, 3.01,
+                               places=2)
+        self.assertAlmostEqual(r["phases"]["archive_detours_years"] / 1e6,
+                               26.1, places=1)
+
+    def test_phases_add_up_to_the_total_in_every_layout(self):
+        for name in pp.ARCHIVE_PRESETS:
+            for kwargs in [dict(), dict(speed_c=0.2, depth=0.3),
+                           dict(probes=37, systems=5e9)]:
+                r = pp.derive(pp.Scenario(archives=name, **kwargs))
+                self.assertAlmostEqual(
+                    sum(r["phases"].values()) / r["total_years"], 1.0,
+                    places=12, msg=(name, kwargs))
+                ph = r["phases"]
+                self.assertSame(
+                    ph["duplicated_work_years"],
+                    ph["survey_work_years"] * r["duplication_fraction"])
+                self.assertSame(
+                    ph["survey_work_years"],
+                    r["visited_per_probe"] * r["per_system_years"])
+
+    def test_distances_add_up(self):
+        r = pp.derive(pp.Scenario(archives="stations-only"))
+        d = r["distance"]
+        self.assertSame(
+            d["per_probe_m"],
+            d["dispersal_m"] + d["survey_path_m"] + d["detour_m"])
+        self.assertSame(d["fleet_m"], d["per_probe_m"] * 10_000)
+        self.assertSame(
+            d["survey_path_m"],
+            r["visited_per_probe"] * r["hop_parsec"] * pp.PARSEC_M
+            * (1 + r["duplication_fraction"]))
+        # Detours: one round trip to the archive point per deposit.
+        deposits = r["regions_per_probe"] / r["layout"]["deposit_every"]
+        self.assertSame(
+            d["detour_m"],
+            deposits * 2 * r["layout"]["detour_kpc"] * pp.KPC_M)
+
+    def test_milestones_are_linear_without_losses(self):
+        r = pp.derive(pp.Scenario())
+        dispersal = r["phases"]["dispersal_years"]
+        survey = r["total_years"] - dispersal
+        for m in r["milestones"]:
+            self.assertSame(m["years"], dispersal + m["fraction"] * survey)
+
+    def test_link_time_is_bits_over_bit_rate(self):
+        sc = pp.Scenario(bitrate_bps=0.25, message_bytes=800.0)
+        c = pp.derive(sc)["comms"]
+        self.assertSame(c["link_seconds_per_message"], 800.0 * 8 / 0.25)
+        self.assertSame(c["fleet_messages"],
+                        c["messages_per_probe"] * sc.probes)
+
+    @staticmethod
+    def probe_years_worked(rate, start_years, end_years, steps=20_000):
+        """Work one starting probe delivers between two dates when the
+        fleet shrinks by `rate` per year: the integral of exp(-rate t),
+        by Simpson's rule, independent of the closed form."""
+        h = (end_years - start_years) / steps
+        total = math.exp(-rate * start_years) + math.exp(-rate * end_years)
+        for i in range(1, steps):
+            total += (4 if i % 2 else 2) * math.exp(
+                -rate * (start_years + i * h))
+        return total * h / 3.0
+
+    def test_attrition_closed_form_matches_numerical_integration(self):
+        base = pp.derive(pp.Scenario())
+        needed = base["total_years"] - base["phases"]["dispersal_years"]
+        dispersal = base["phases"]["dispersal_years"]
+        for rate in (1e-12, 1e-10, 3e-10, 6e-10):
+            r = pp.derive(pp.Scenario(attrition_per_year=rate))
+            self.assertEqual(r["attrition"]["completed_fraction"], 1.0, rate)
+            worked = self.probe_years_worked(rate, dispersal,
+                                             r["total_years"])
+            self.assertAlmostEqual(worked / needed, 1.0, places=9, msg=rate)
+            for m in r["milestones"]:
+                worked = self.probe_years_worked(rate, dispersal, m["years"])
+                self.assertAlmostEqual(worked / (m["fraction"] * needed),
+                                       1.0, places=9, msg=(rate, m))
+
+    def test_exhausted_fleet_fraction_matches_numerical_integration(self):
+        base = pp.derive(pp.Scenario())
+        needed = base["total_years"] - base["phases"]["dispersal_years"]
+        dispersal = base["phases"]["dispersal_years"]
+        for rate in (1e-9, 1e-8):
+            r = pp.derive(pp.Scenario(attrition_per_year=rate))
+            self.assertTrue(r["fleet_exhausted"])
+            # Everything the fleet will ever do: integrate far past the
+            # point where no probe is left.
+            ever = self.probe_years_worked(rate, dispersal,
+                                           dispersal + 60.0 / rate)
+            self.assertAlmostEqual(
+                r["attrition"]["completed_fraction"] / (ever / needed), 1.0,
+                places=9, msg=rate)
+            reached = [m for m in r["milestones"] if m["years"] is not None]
+            for m in reached:
+                self.assertLess(m["fraction"],
+                                r["attrition"]["completed_fraction"])
+
+    def test_loss_rate_threshold_is_one_over_the_survey_time(self):
+        # Completion needs loss rate x survey time below about one.
+        base = pp.derive(pp.Scenario())
+        survey = base["total_years"] - base["phases"]["dispersal_years"]
+        just_below = pp.derive(pp.Scenario(attrition_per_year=0.99 / survey))
+        just_above = pp.derive(pp.Scenario(attrition_per_year=1.01 / survey))
+        self.assertFalse(just_below["fleet_exhausted"])
+        self.assertTrue(just_above["fleet_exhausted"])
 
 
 class TestOneSourceOfTruth(unittest.TestCase):
