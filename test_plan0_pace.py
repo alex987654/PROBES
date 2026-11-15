@@ -137,6 +137,69 @@ class TestModel(unittest.TestCase):
                 pp.derive(pp.Scenario(**bad))
 
 
+class TestStaleness(unittest.TestCase):
+    """Audit A5: every input either changes the result or is reported."""
+
+    def test_delays_add_one_after_another(self):
+        r = pp.derive(pp.Scenario())
+        parts = r["staleness_parts_years"]
+        self.assertAlmostEqual(sum(parts.values()), r["staleness_years"])
+        self.assertAlmostEqual(parts["deposit_interval"],
+                               r["region_cycle_years"])
+        self.assertAlmostEqual(parts["consolidation_cycle"], 10_000.0)
+        light_years = (r["layout"]["cache_spacing_kpc"] * pp.KPC_M
+                       / pp.C_M_PER_S / pp.YEAR_S)
+        self.assertAlmostEqual(parts["light_between_points"], light_years)
+
+    def test_consolidation_cadence_matters_everywhere(self):
+        # It used to change nothing between 100 and 150,000 years.
+        cadences = [100.0, 1e3, 1e4, 1e5, 1.5e5, 1e6]
+        runs = [pp.derive(pp.Scenario(consolidation_years=c))
+                for c in cadences]
+        for (c0, r0), (c1, r1) in zip(zip(cadences, runs),
+                                      zip(cadences[1:], runs[1:])):
+            self.assertAlmostEqual(
+                r1["staleness_years"] - r0["staleness_years"], c1 - c0,
+                places=3)
+            self.assertGreater(r1["phases"]["duplicated_work_years"],
+                               r0["phases"]["duplicated_work_years"])
+            self.assertGreater(r1["total_years"], r0["total_years"])
+
+    def test_cache_spacing_matters_in_station_layouts(self):
+        # It used to be read only by the layout without stations.
+        extra = 49.5 * pp.KPC_M / pp.C_M_PER_S / pp.YEAR_S
+        for name in ("full-network", "stations-only", "sparse"):
+            near = pp.derive(pp.Scenario(archives=name,
+                                         cache_spacing_kpc=0.5))
+            far = pp.derive(pp.Scenario(archives=name,
+                                        cache_spacing_kpc=50.0))
+            self.assertAlmostEqual(
+                far["staleness_years"] - near["staleness_years"], extra,
+                places=3, msg=name)
+            self.assertGreater(far["total_years"], near["total_years"], name)
+
+    def test_inputs_that_cannot_matter_are_reported(self):
+        self.assertEqual(pp.derive(pp.Scenario())["unused_inputs"], [])
+        r = pp.derive(pp.Scenario(archives="none", cache_spacing_kpc=5.0,
+                                  consolidation_years=500.0,
+                                  deposit_every=3, bitrate_bps=1.0))
+        self.assertEqual(
+            {item["input"] for item in r["unused_inputs"]},
+            {"cache_spacing_kpc", "consolidation_years", "deposit_every",
+             "bitrate_bps"})
+        report = pp.render_report(r)
+        self.assertIn("Inputs given but not used", report)
+        for flag in ("--cache-spacing", "--consolidation-years",
+                     "--deposit-every", "--bitrate"):
+            self.assertIn(flag, report)
+        r = pp.derive(pp.Scenario(archives="route-boxes-only",
+                                  consolidation_years=500.0))
+        self.assertEqual([item["input"] for item in r["unused_inputs"]],
+                         ["consolidation_years"])
+        self.assertNotIn("Inputs given but not used",
+                         pp.render_report(pp.derive(pp.Scenario())))
+
+
 class TestInputValidation(unittest.TestCase):
     """Every input the model reads is checked before use (audit A2-A4)."""
 

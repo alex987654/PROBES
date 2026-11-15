@@ -247,6 +247,35 @@ def resolve_layout(sc: Scenario) -> dict:
     return layout
 
 
+def _unused_inputs(sc: Scenario, layout: dict) -> list:
+    """Inputs that were set to something other than their default but
+    cannot change this run, each with the reason. An input that does
+    nothing must not pass silently (audit A5)."""
+    default = Scenario()
+
+    def given(name):
+        return getattr(sc, name) != getattr(default, name)
+
+    unused = []
+
+    def note(name, reason):
+        if given(name):
+            unused.append(dict(input=name, reason=reason))
+
+    if layout["deposit_every"] is None:
+        why = "the chosen layout has no archive points"
+        for name in ("cache_spacing_kpc", "detour_kpc", "deposit_every",
+                     "consolidation_years"):
+            note(name, why)
+        for name in ("bitrate_bps", "message_bytes"):
+            note(name, "without archive points no messages are sent")
+    elif not layout["consolidated"]:
+        note("consolidation_years",
+             "the chosen layout has no staffed stations, so nothing is "
+             "consolidated")
+    return unused
+
+
 # ---------------------------------------------------------------------------
 # The analytic model
 # ---------------------------------------------------------------------------
@@ -287,21 +316,31 @@ def derive(sc: Scenario) -> dict:
     detour_s = detour_m_per_probe / v
 
     # Knowledge staleness: how old, at region-selection time, the completion
-    # facts of neighboring probes are. Consolidated layouts refresh at each
-    # deposit visit but never faster than the consolidation cycle; passive
-    # layouts spread facts only through boxes both probes physically visit.
-    # Beam propagation (~880 years per node spacing, section 1) is negligible
-    # against these intervals and is folded into the refresh term.
+    # facts of neighboring probes can be. The delays act one after another,
+    # so they add. With staffed stations: a neighbor's region stays off the
+    # record until that neighbor's next deposit (only completions are
+    # recorded, so work in progress is invisible), the record then waits
+    # for the station's next consolidation cycle, and finally crosses to
+    # the reader's archive point at light speed. Without stations a fact
+    # moves only when a probe carries it, so both probes' deposit
+    # intervals count and the crossing happens at probe speed.
     tc_s = sc.consolidation_years * YEAR_S
+    spacing_m = (layout["cache_spacing_kpc"] or 0.0) * KPC_M
     if dep_every is None:
+        staleness_parts = {}
         tau_s = math.inf
     else:
         refresh_s = t_region_s * dep_every
         if layout["consolidated"]:
-            tau_s = max(refresh_s, tc_s)
+            staleness_parts = dict(
+                deposit_interval=refresh_s,
+                consolidation_cycle=tc_s,
+                light_between_points=spacing_m / C_M_PER_S)
         else:
-            spacing_s = (layout["cache_spacing_kpc"] or 0.0) * KPC_M / v
-            tau_s = 2.0 * refresh_s + spacing_s
+            staleness_parts = dict(
+                deposit_interval=2.0 * refresh_s,
+                carried_between_points=spacing_m / v)
+        tau_s = sum(staleness_parts.values())
 
     # Duplicated-work fraction: each region selection risks colliding with
     # one of ~`neighbors` adjacent probes whose completions are up to tau
@@ -363,6 +402,9 @@ def derive(sc: Scenario) -> dict:
         region_cycle_years=t_region_s / YEAR_S,
         staleness_years=None if math.isinf(tau_s) else tau_s / YEAR_S,
         staleness_infinite=math.isinf(tau_s),
+        staleness_parts_years={name: part / YEAR_S
+                               for name, part in staleness_parts.items()},
+        unused_inputs=_unused_inputs(sc, layout),
         duplication_fraction=f_dup,
         # True when the formula asked for more than the ceiling although
         # archives exist: the fleet is too large for the approximation.
@@ -480,6 +522,22 @@ def fmt_meters(meters: float, canonical: bool = False) -> str:
     return "%s light-years (%s)" % (human_count(ly), si_quantity(meters, "meter"))
 
 
+_STALENESS_LABELS = {
+    "deposit_interval": "between deposits of finished work",
+    "consolidation_cycle": "waiting for the next consolidation",
+    "light_between_points": "light time between archive points",
+    "carried_between_points": "carried between boxes at probe speed",
+}
+
+
+def flag_for(name: str) -> str:
+    """Command-line spelling of a scenario input, for messages."""
+    for action in build_parser()._actions:
+        if action.dest == name and action.option_strings:
+            return action.option_strings[0]
+    return name
+
+
 def render_report(r: dict, canonical: bool = False) -> str:
     sc = r["scenario"]
     layout = r["layout"]
@@ -546,8 +604,11 @@ def render_report(r: dict, canonical: bool = False) -> str:
     if r["staleness_infinite"]:
         add("  no shared archives: staleness unbounded, duplication at cap")
     else:
-        add("  completion facts stale by ~%s at selection time"
+        add("  completion facts are up to %s old when a region is chosen:"
             % fmt_years(r["staleness_years"], canonical))
+        for name, years in r["staleness_parts_years"].items():
+            add("    %-34s %s" % (_STALENESS_LABELS[name],
+                                  fmt_years(years, canonical)))
     add("  duplicated-work fraction: %.3g (cap %.2g)"
         % (r["duplication_fraction"], sc["dup_cap"]))
     if r["duplication_capped"]:
@@ -560,6 +621,12 @@ def render_report(r: dict, canonical: bool = False) -> str:
             % human_count(r["visited_per_probe"]))
         add("  (%s systems), so the share itself is treated as the region"
             % human_count(sc["region_systems"]))
+    if r["unused_inputs"]:
+        add("")
+        add("Inputs given but not used in this run")
+        add("-" * 60)
+        for item in r["unused_inputs"]:
+            add("  %s: %s" % (flag_for(item["input"]), item["reason"]))
     add("")
     add("Doctrine constants echoed (Physical Layer section 1)")
     add("-" * 60)
@@ -611,7 +678,13 @@ def render_explain(r: dict) -> str:
         "",
         "knowledge staleness tau = %s"
         % ("unbounded (no archives)" if r["staleness_infinite"]
-           else "%.4g years" % r["staleness_years"]),
+           else "the sum of delays that follow one another"),
+    ]
+    lines += ["  %-36s %.4g years" % (_STALENESS_LABELS[name], years)
+              for name, years in r["staleness_parts_years"].items()]
+    if not r["staleness_infinite"]:
+        lines.append("  = %.4g years" % r["staleness_years"])
+    lines += [
         "duplication fraction = min(cap, gain x (tau / region cycle)",
         "                           x neighbors / regions per probe)",
         "  = %.4g   (cap %.2g, gain %.2g, neighbors %d)"
