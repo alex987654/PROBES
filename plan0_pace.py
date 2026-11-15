@@ -1191,9 +1191,16 @@ def passes_for_share(share: float, changes_per_pass: float,
 # staffed stretch). Against a simulation that follows each star's swing
 # turn by turn this is a few percent too hopeful; counting the swing 1.5
 # times closes the gap to within 0.02 for fleets of 1,000 to 150,000
-# probes. Moving the line against the rotation does not help a fleet this
-# size: the stars arrive sooner, but in proportion more of them per year,
-# so the staffed stretch is shorter.
+# probes.
+#
+# Moving the line against the rotation is not modeled. The stars arrive
+# sooner, but in proportion more of them per year, so the staffed stretch
+# is shorter. In the simulation (10,000 probes, line turning backward at
+# the rate of the stars at half the disc radius) a sweep takes as long as
+# before while the work lasts longer than a turn of the disc, and reaches
+# 2 percent fewer of the systems at 0.05 of light speed, 3 to 4 percent
+# more at 0.1 to 0.2. A fleet that is held up by the turning disc gains
+# time: 40,000 probes at 0.1 finish a sweep three times sooner.
 
 LINE_SWING_CALIBRATION = 1.5
 _LINE_TABLE = []
@@ -2314,7 +2321,11 @@ def describe_reached(r: dict, canonical: bool = False) -> list:
             "Staffing the whole line at once would take %s probes. Moving "
             "the line against the rotation brings the stars past sooner, "
             "but in proportion more of them per year, so this fleet could "
-            "staff only a shorter stretch: nothing is gained."
+            "staff only a shorter stretch. In simulation that changes "
+            "what a sweep reaches by a few percent of the systems, up or "
+            "down, and it shortens the sweep only where the fleet would "
+            "otherwise be held up by the turning of the disc. It is not "
+            "modeled here."
             % human_count(line["probes_to_staff_all"], 2))
         lines += fill(
             "The archive layout, the staleness and the side trips in this "

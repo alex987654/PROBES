@@ -2066,18 +2066,36 @@ class TestStrategies(unittest.TestCase):
             # One sweep makes one visit per system, whatever it reaches.
             self.assertAlmostEqual(visits, 1.0, delta=0.03, msg=probes)
 
-    def test_moving_against_the_rotation_gains_nothing(self):
-        sc = pp.Scenario(strategy="sweep-line")
-        still = simulate_line(sc)
-        # Backward at the speed the stars have at half the disc radius.
-        backward = (pp.ROTATION_SPEED_M_S * pp.YEAR_S / pp.PARSEC_M
-                    / (sc.disc_radius_kpc * 500.0))
-        moving = simulate_line(sc, against_rotation=backward)
-        self.assertLess(moving[0], still[0] + 0.02)      # share seen
-        self.assertGreater(moving[2], still[2] * 0.97)   # years taken
-        # The stars do arrive faster, but the same number must be dealt
-        # with, so the work is the same.
-        self.assertAlmostEqual(moving[1], still[1], delta=0.03)
+    def test_moving_against_the_rotation_helps_only_a_fleet_that_waits(self):
+        def pair(**inputs):
+            sc = pp.Scenario(strategy="sweep-line", **inputs)
+            # Backward at the rate the stars have at half the disc radius.
+            backward = (pp.ROTATION_SPEED_M_S * pp.YEAR_S / pp.PARSEC_M
+                        / (sc.disc_radius_kpc * 500.0))
+            return (simulate_line(sc),
+                    simulate_line(sc, against_rotation=backward))
+        # While the work lasts longer than a turn of the disc, the sweep
+        # takes as long either way. What it reaches moves by a few percent
+        # of the systems: down at 0.05 of light speed, up at 0.1.
+        for speed, change in ((0.05, -0.021), (0.1, 0.036)):
+            still, moving = pair(speed_c=speed)
+            self.assertAlmostEqual(moving[2] / still[2], 1.0, delta=0.05,
+                                   msg=speed)
+            self.assertAlmostEqual(moving[0] - still[0], change, delta=0.01,
+                                   msg=speed)
+            # The stars do arrive faster, but the same number must be
+            # dealt with, so the work is the same.
+            self.assertAlmostEqual(moving[1], still[1], delta=0.03)
+        # A fleet that is held up by the turning disc finishes its sweep
+        # three times sooner, and misses no more.
+        still, moving = pair(speed_c=0.1, probes=40_000)
+        self.assertAlmostEqual(still[2] / moving[2], 3.0, delta=0.1)
+        self.assertGreater(moving[0], still[0])
+        text = " ".join(pp.render_report(pp.derive(pp.Scenario(
+            strategy="sweep-line"))).split())
+        self.assertIn("it shortens the sweep only where the fleet would "
+                      "otherwise be held up by the turning of the disc", text)
+        self.assertNotIn("nothing is gained", text)
 
     def test_a_sweep_cannot_outrun_the_turning_disc(self):
         # A fleet that could finish its visits sooner still has to keep
