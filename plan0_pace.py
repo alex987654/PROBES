@@ -57,13 +57,25 @@ STRATEGIES = {
                    "system is surveyed when it crosses the line"),
     "systems": ("as regions, but completion is recorded by system, so a "
                 "system surveyed anywhere is recognized and never visited "
-                "twice"),
+                "twice; a probe goes to the nearest system not yet "
+                "surveyed"),
     "systems-midplane": ("as systems, with the probes waiting in a thin "
                          "layer at the mid-plane of the disc, where "
                          "systems are closest together, and taking each "
                          "system as it passes through"),
 }
 RECORDS_BY_SYSTEM = ("systems", "systems-midplane")
+
+# Hops where completion is recorded by system. Simulated (stars drifting at
+# random through a volume that wraps around, up to 300,000 systems): a
+# probe that always goes to the nearest system not yet surveyed makes hops
+# of 0.65 times the spacing of the systems still to do, at every stage of
+# the survey, because the drift evens out whatever it leaves behind. A
+# route that has to clear a field of fixed points starts the same way and
+# averages 0.78 only because its last points lie in scattered leftovers.
+# The path factor, which describes such a route, is scaled by the ratio.
+OPEN_FIELD_HOP = 0.65
+CLEARED_FIELD_HOP = 0.78
 
 # Beyond this duration the galaxy itself rotates, shears and forms stars
 # on the timescale of the survey, none of which the model follows; any
@@ -458,7 +470,9 @@ INPUT_TABLE = [
      "field of random points (simulated; 0.83 inside one region of 1000 "
      "systems); the shortest route through random points costs 0.70 "
      "(Cerf and others 1997); 1.0 is one mean spacing per hop, an upper "
-     "bound"),
+     "bound. Where completion is recorded by system the factor is scaled "
+     "by 0.65 / 0.78: a probe that need not clear a region, among "
+     "drifting stars, makes hops of 0.65 spacings (simulated)"),
     ("acceleration_m_s2", 0.01, 1.0, "log", False,
      "not modeled unless given; the 1978 fusion-probe study reached 0.12 "
      "of light speed after 3.8 years of thrust, about 0.3 meters per "
@@ -1454,7 +1468,9 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
     # the density of *visited* systems is the local density times depth
     # and every spacing stretches by depth^(-1/3).
     #
-    # Where completion is recorded by system, no system is visited twice,
+    # Where completion is recorded by system a probe goes to the nearest
+    # system not yet surveyed and never has to clear a volume, which
+    # shortens its hops (see OPEN_FIELD_HOP). No system is visited twice,
     # but the systems still to do thin out among those already done, so
     # the hops grow as the survey proceeds: path_share() below is the
     # distance traveled, in first hops per system, when a share of the
@@ -1462,6 +1478,8 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
     # speeding up and slowing down stays as it is.
     by_system = sc.strategy in RECORDS_BY_SYSTEM
     hop_scale = sc.path_factor * sc.depth ** (-1.0 / 3.0)
+    if by_system:
+        hop_scale *= OPEN_FIELD_HOP / CLEARED_FIELD_HOP
     hop_m = hop_scale * gal["mean_spacing_pc"] * PARSEC_M
     accel = sc.acceleration_m_s2
     first_hop_s, cruise_share = mean_hop_seconds(gal, hop_scale, v, accel)
@@ -2111,13 +2129,17 @@ def describe_reached(r: dict, canonical: bool = False) -> list:
         text = (
             "Completion is recorded by system: a probe recognizes a system "
             "that was surveyed anywhere and passes it by. No visit is "
-            "repeated, and the milestones count systems. The price is "
-            "longer hops. The stars mix long before the survey ends (a "
-            "system changes region %s to %s times), so the systems still "
-            "to do thin out among those already done: a hop is %s times "
-            "the first ones when half are done, %s times at 90%%, and %s "
-            "times on average."
-            % (human_count(few, 2), human_count(many, 2),
+            "repeated, and the milestones count systems. A probe goes to "
+            "the nearest system not yet surveyed and never has to clear a "
+            "volume, so its hops are %s times the spacing of the systems "
+            "still to do, against %s for a route that clears a region "
+            "(simulated). The price is that those systems thin out. The "
+            "stars mix long before the survey ends (a system changes "
+            "region %s to %s times), so a hop is %s times the first ones "
+            "when half are done, %s times at 90%%, and %s times on average."
+            % (sig(sc["path_factor"] * OPEN_FIELD_HOP / CLEARED_FIELD_HOP, 2),
+               sig(sc["path_factor"], 2),
+               human_count(few, 2), human_count(many, 2),
                sig(growth["0.5"], 3), sig(growth["0.9"], 3),
                sig(r["hop_thinning"], 3)))
         lines = fill(text)
@@ -2770,11 +2792,27 @@ def render_explain(r: dict) -> str:
     ]
     lines += explain_galaxy(r)
     by_system = r["strategy"] in RECORDS_BY_SYSTEM
+    lines += [""]
+    if by_system:
+        lines += [
+            "inter-system hop, first ones = path_factor x %.3g / %.3g x "
+            "depth^(-1/3)" % (OPEN_FIELD_HOP, CLEARED_FIELD_HOP),
+            "    x mean spacing   (%.3g: nearest system not yet surveyed "
+            "among" % OPEN_FIELD_HOP,
+            "    drifting stars; %.3g: a route that clears a field of "
+            "fixed points)" % CLEARED_FIELD_HOP,
+            "  = %.3g x %.4g x %.3g^(-1/3) x %.4g parsecs"
+            % (sc["path_factor"], OPEN_FIELD_HOP / CLEARED_FIELD_HOP,
+               sc["depth"], r["galaxy"]["mean_spacing_pc"]),
+        ]
+    else:
+        lines += [
+            "inter-system hop = path_factor x depth^(-1/3) x mean spacing",
+            "  = %.3g x %.3g^(-1/3) x %.4g parsecs"
+            % (sc["path_factor"], sc["depth"],
+               r["galaxy"]["mean_spacing_pc"]),
+        ]
     lines += [
-        "",
-        "inter-system hop = path_factor x depth^(-1/3) x mean spacing",
-        "  = %.3g x %.3g^(-1/3) x %.4g parsecs"
-        % (sc["path_factor"], sc["depth"], r["galaxy"]["mean_spacing_pc"]),
         "  = %.4g parsecs  ->  %.4g years at cruise speed"
         % (r["hop_parsec"],
            r["hop_parsec"] * PARSEC_M / r["speed_m_per_s"] / YEAR_S),

@@ -1481,6 +1481,51 @@ def simulate_midplane(stars=4000, height=12.0, layer=0.3, speed=0.1, seed=5,
     return out
 
 
+def simulate_open_field(stars=2000, speed=0.018, seed=7, marks=(0.5, 0.9)):
+    """Stars drift at random through a cube that wraps around; one probe
+    always goes to the nearest system not yet surveyed. Lengths are in
+    spacings, speeds in probe speeds. Returns the distance traveled per
+    system at each share done."""
+    rng = random.Random(seed)
+    side = stars ** (1.0 / 3.0)
+    start = [[rng.random() * side for _ in range(3)] for _ in range(stars)]
+    drift = [[rng.gauss(0.0, speed) for _ in range(3)] for _ in range(stars)]
+    alive = list(range(stars))
+    done = [False] * stars
+    here = [0.0, 0.0, 0.0]
+    clock = refresh_at = traveled = 0.0
+    count = 0
+    out = {}
+    marks = list(marks)
+    spots = []
+    while marks:
+        if clock >= refresh_at:
+            alive = [j for j in alive if not done[j]]
+            spots = [(j, [(start[j][a] + drift[j][a] * clock) % side
+                          for a in range(3)]) for j in alive]
+            refresh_at = clock + 0.5 / speed
+        best = None
+        for j, spot in spots:
+            if done[j]:
+                continue
+            d = 0.0
+            for a in range(3):
+                gap = abs(spot[a] - here[a])
+                gap = min(gap, side - gap)
+                d += gap * gap
+            if best is None or d < best[0]:
+                best = (d, j, spot)
+        done[best[1]] = True
+        here = best[2]
+        hop = math.sqrt(best[0])
+        clock += hop
+        traveled += hop
+        count += 1
+        if count >= marks[0] * stars:
+            out[marks.pop(0)] = traveled / stars
+    return out
+
+
 class TestStrategies(unittest.TestCase):
     """Other ways of running the survey, compared with the specification."""
 
@@ -1507,16 +1552,53 @@ class TestStrategies(unittest.TestCase):
             self.assertAlmostEqual(
                 total, 1.5 * (1 - (1 - share) ** (2 / 3)), places=3)
 
+    def test_nearest_unsurveyed_system_among_drifting_stars(self):
+        # Full-size runs (100,000 and 300,000 systems): hops of 0.65
+        # times the spacing of the systems still to do, from the first
+        # to the 99th percent, whatever the drift speed. A field of fixed
+        # points starts at 0.65 too and ends at 0.78 on average. This is
+        # a small run.
+        self.assertEqual(pp.OPEN_FIELD_HOP, 0.65)
+        self.assertEqual(pp.CLEARED_FIELD_HOP, pp.Scenario().path_factor)
+        traveled = simulate_open_field()
+        for share, per_system in traveled.items():
+            even = 1.5 * (1 - (1 - share) ** (2 / 3))
+            self.assertAlmostEqual(per_system / even, pp.OPEN_FIELD_HOP,
+                                   delta=0.03)
+
+    def test_records_by_system_shorten_the_first_hops(self):
+        base = pp.derive(pp.Scenario(strategy="regions"))
+        for path_factor in (0.78, 1.0):
+            by_region = pp.derive(pp.Scenario(strategy="regions",
+                                              path_factor=path_factor))
+            by_system = pp.derive(pp.Scenario(strategy="systems",
+                                              path_factor=path_factor))
+            self.assertAlmostEqual(
+                by_system["hop_parsec"] / by_region["hop_parsec"],
+                0.65 / 0.78)
+        self.assertAlmostEqual(
+            pp.derive(pp.Scenario(strategy="systems"))["hop_parsec"],
+            0.65 * base["galaxy"]["mean_spacing_pc"])
+        # The route through a region is not touched.
+        self.assertAlmostEqual(base["hop_parsec"],
+                               0.78 * base["galaxy"]["mean_spacing_pc"])
+        text = " ".join(line.strip() for line in pp.render_report(
+            pp.derive(pp.Scenario(strategy="systems"))).splitlines())
+        self.assertIn("its hops are 0.65 times the spacing of the systems "
+                      "still to do, against 0.78", text)
+        self.assertIn("path_factor x 0.65 / 0.78", pp.render_explain(
+            pp.derive(pp.Scenario(strategy="systems"))))
+        self.assertNotIn("0.65 / 0.78", pp.render_explain(base))
+
     def test_records_by_system_lengthen_hops_not_stays(self):
-        base = pp.derive(pp.Scenario())
+        base = pp.derive(pp.Scenario(strategy="regions"))
         r = pp.derive(pp.Scenario(strategy="systems"))
+        first = base["hop_years"] * 0.65 / 0.78
         self.assertEqual(r["hop_thinning"], 1.5)
         self.assertEqual(base["hop_thinning"], 1.0)
-        self.assertEqual(r["hop_years"], base["hop_years"])    # first hops
-        self.assertAlmostEqual(r["hop_years_average"],
-                               1.5 * base["hop_years"])
-        self.assertAlmostEqual(r["per_system_years"],
-                               1.5 * base["hop_years"] + 10.0)
+        self.assertAlmostEqual(r["hop_years"], first)          # first hops
+        self.assertAlmostEqual(r["hop_years_average"], 1.5 * first)
+        self.assertAlmostEqual(r["per_system_years"], 1.5 * first + 10.0)
         self.assertAlmostEqual(
             r["phases"]["survey_work_years"]
             / (r["visited_per_probe"] * r["per_system_years"]), 1.0,
@@ -1524,7 +1606,7 @@ class TestStrategies(unittest.TestCase):
         self.assertAlmostEqual(
             r["distance"]["survey_path_m"] / base["distance"]["survey_path_m"]
             * (1 + base["duplication_fraction"])
-            / (1 + r["duplication_fraction"]), 1.5)
+            / (1 + r["duplication_fraction"]), 1.5 * 0.65 / 0.78)
         self.assertEqual(r["milestones_count"], "systems")
         self.assertEqual(r["reached"]["seen_after_one_pass"], 1.0)
         self.assertEqual(r["reached"]["repeat_visit_share"], 0.0)
@@ -1914,11 +1996,11 @@ class TestStrategies(unittest.TestCase):
     def test_ranking_for_the_default_fleet(self):
         rows = {row["strategy"]: row
                 for row in pp.derive(pp.Scenario())["strategies"]}
-        # 5.3, 3.9, 1.6 and 1.6 billion years: recording by system is
+        # 5.3, 3.9, 1.3 and 1.3 billion years: recording by system is
         # what counts, not where the probes wait.
         for name, expected in (("regions", 5.26e9), ("sweep-line", 3.93e9),
-                               ("systems", 1.558e9),
-                               ("systems-midplane", 1.558e9)):
+                               ("systems", 1.318e9),
+                               ("systems-midplane", 1.318e9)):
             self.assertAlmostEqual(rows[name]["years_to_99_percent"]
                                    / expected, 1.0, delta=0.01, msg=name)
         self.assertAlmostEqual(rows["regions"]["seen_after_one_pass"], 0.632,
