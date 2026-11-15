@@ -2129,6 +2129,10 @@ extra duplicated work done because probes only learn what others have
 finished after a delay set by the archive layout, and (4) side trips to
 archive sites to deposit and read records. Message transmission time is
 also computed, and shown to be negligible.
+
+The report also says how sure the answer is, what every stop costs in
+propellant, how many probes the survey can afford to lose, and which
+effects the estimate leaves out, each with its size.
 """
 
 _EPILOG = """\
