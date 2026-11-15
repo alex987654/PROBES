@@ -141,6 +141,7 @@ _NUMBER_RULES = {
     "depth": (0, False, 1, True),
     "dwell_years": (0, True, None, False),
     "path_factor": (0, False, None, False),
+    "acceleration_m_s2": (0, False, None, False),
     "region_systems": (0, False, None, False),
     "dispersal_leg_kpc": (0, True, None, False),
     "envelope_factor": (0, False, None, False),
@@ -159,7 +160,8 @@ _NUMBER_RULES = {
 _WHOLE_NUMBER_FIELDS = ("probes", "station_count", "deposit_every",
                         "neighbors")
 # Inputs that may be left unset (the layout preset or the model fills in).
-_OPTIONAL_FIELDS = ("systems", "stellar_density", "dispersal_leg_kpc",
+_OPTIONAL_FIELDS = ("systems", "stellar_density", "acceleration_m_s2",
+                    "dispersal_leg_kpc",
                     "cache_spacing_kpc", "detour_kpc", "station_count",
                     "deposit_every")
 
@@ -198,6 +200,9 @@ class Scenario:
     # (Cerf and others 1997). 1.0: one mean spacing per hop, the old
     # default, an upper bound for any sensible route.
     path_factor: float = 0.78
+    # Acceleration and braking, meters per second squared. None treats
+    # stops and starts as instant, the limit of strong engines.
+    acceleration_m_s2: Optional[float] = None
     region_systems: float = 1000.0       # visited systems per record region
     # Scattering before the survey (Physical Layer section 4.5). No probe
     # may start before the last one can have arrived, or the start times
@@ -392,6 +397,10 @@ INPUT_TABLE = [
      "systems); the shortest route through random points costs 0.70 "
      "(Cerf and others 1997); 1.0 is one mean spacing per hop, an upper "
      "bound"),
+    ("acceleration_m_s2", 0.01, 1.0, "log", False,
+     "not modeled unless given; the 1978 fusion-probe study reached 0.12 "
+     "of light speed after 3.8 years of thrust, about 0.3 meters per "
+     "second squared"),
     ("region_systems", None, None, None, False,
      "assumption; the specification fixes no region size"),
     ("dispersal_leg_kpc", None, None, None, False,
@@ -725,6 +734,93 @@ def spacing_percentile(gal: dict, share: float) -> float:
     return math.exp(high)
 
 
+# ---------------------------------------------------------------------------
+# Stop-and-go travel
+# ---------------------------------------------------------------------------
+#
+# A probe that must stop at every system cannot cruise the whole hop. With
+# acceleration a it needs the time v / a and the distance v^2 / (2 a) to
+# reach cruise speed v, and the same again to stop. A leg of length d
+# therefore takes
+#     d / v + v / a           if d >= v^2 / a   (cruise speed is reached)
+#     2 sqrt(d / a)           otherwise         (it turns around halfway)
+# Newtonian motion: at 0.2 of light speed the error is about two percent.
+
+# Accelerations quoted for comparison when none is given.
+REFERENCE_ACCELERATIONS = (1.0, 0.1, 0.01)
+
+
+def leg_seconds(distance_m: float, v: float, acceleration) -> float:
+    """Travel time of one leg from rest to rest."""
+    if acceleration is None:
+        return distance_m / v
+    if distance_m * acceleration >= v * v:
+        return distance_m / v + v / acceleration
+    return 2.0 * math.sqrt(distance_m / acceleration)
+
+
+def _part_hop_seconds(part: dict, hop_scale: float, v: float,
+                      acceleration: float, steps: int = 1500) -> tuple:
+    """Mean hop time over one part of the galaxy, and the share of its
+    hops that reach cruise speed, by midpoint quadrature over the local
+    hop length (which is central hop x exp(u / 3))."""
+    shortest_m = hop_scale * part["central_spacing_pc"] * PARSEC_M
+    ramp_m = v * v / acceleration
+    total = reach = 0.0
+    if part["kind"] == "disc":
+        # u = R / L + |z| / h has density exp(-u) min(u, xm)^2 / (2 g1(xm))
+        xm = part["xm"]
+        du = (xm + 45.0) / steps
+        norm = 2.0 * _g1(xm)
+        for i in range(steps):
+            u = (i + 0.5) * du
+            m = min(u, xm)
+            weight = math.exp(-u) * m * m / norm * du
+            d = shortest_m * math.exp(u / 3.0)
+            total += weight * leg_seconds(d, v, acceleration)
+            if d >= ramp_m:
+                reach += weight
+    else:
+        # q = r^2 / (2 s^2) = y^2 has density (4 / sqrt(pi)) y^2 exp(-y^2)
+        dy = 8.0 / steps
+        norm = 4.0 / math.sqrt(math.pi)
+        for i in range(steps):
+            y = (i + 0.5) * dy
+            weight = norm * y * y * math.exp(-y * y) * dy
+            d = shortest_m * math.exp(y * y / 3.0)
+            total += weight * leg_seconds(d, v, acceleration)
+            if d >= ramp_m:
+                reach += weight
+    return total, reach
+
+
+def mean_hop_seconds(gal: dict, hop_scale: float, v: float,
+                     acceleration) -> tuple:
+    """Mean time of one hop between systems, averaged over all systems,
+    and the share of hops on which cruise speed is reached."""
+    if acceleration is None:
+        return hop_scale * gal["mean_spacing_pc"] * PARSEC_M / v, 1.0
+    ramp_m = v * v / acceleration
+    total = reach = 0.0
+    for part in gal["parts"]:
+        shortest_m = hop_scale * part["central_spacing_pc"] * PARSEC_M
+        if part["kind"] == "uniform":
+            total += leg_seconds(shortest_m, v, acceleration)
+            reach += 1.0 if shortest_m >= ramp_m else 0.0
+        elif shortest_m >= ramp_m:
+            # Every hop of this part reaches cruise speed, so the time is
+            # linear in the hop length and the mean hop length suffices.
+            mean_m = hop_scale * part["mean_spacing_pc"] * PARSEC_M
+            total += part["share"] * (mean_m / v + v / acceleration)
+            reach += part["share"]
+        else:
+            seconds, share = _part_hop_seconds(part, hop_scale, v,
+                                               acceleration)
+            total += part["share"] * seconds
+            reach += part["share"] * share
+    return total, reach
+
+
 def _unused_inputs(sc: Scenario, layout: dict, gal: dict) -> list:
     """Inputs that were set to something other than their default but
     cannot change this run, each with the reason. An input that does
@@ -788,7 +884,8 @@ def derive(sc: Scenario, detail: bool = True) -> dict:
     # and every spacing stretches by depth^(-1/3).
     hop_scale = sc.path_factor * sc.depth ** (-1.0 / 3.0)
     hop_m = hop_scale * gal["mean_spacing_pc"] * PARSEC_M
-    t_hop_s = hop_m / v
+    accel = sc.acceleration_m_s2
+    t_hop_s, cruise_share = mean_hop_seconds(gal, hop_scale, v, accel)
     dwell_s = sc.dwell_years * YEAR_S
     t_sys_s = t_hop_s + dwell_s
 
@@ -808,7 +905,9 @@ def derive(sc: Scenario, detail: bool = True) -> dict:
     dep_every = layout["deposit_every"]
     deposits_per_probe = regions_per_probe / dep_every if dep_every else 0.0
     detour_m_per_probe = deposits_per_probe * 2.0 * layout["detour_kpc"] * KPC_M
-    detour_s = detour_m_per_probe / v
+    # Out and back: two legs, each from rest to rest.
+    detour_s = deposits_per_probe * 2.0 * leg_seconds(
+        layout["detour_kpc"] * KPC_M, v, accel)
 
     # Knowledge staleness: how old, at region-selection time, the completion
     # facts of neighboring probes can be. The delays act one after another,
@@ -855,7 +954,7 @@ def derive(sc: Scenario, detail: bool = True) -> dict:
     diameter_kpc = 2.0 * sc.disc_radius_kpc
     leg_kpc = (diameter_kpc if sc.dispersal_leg_kpc is None
                else sc.dispersal_leg_kpc)
-    dispersal_s = leg_kpc * KPC_M / v * sc.envelope_factor
+    dispersal_s = leg_seconds(leg_kpc * KPC_M, v, accel) * sc.envelope_factor
     duplication_s = work_s * f_dup
     survey_s = work_s + duplication_s + detour_s
 
@@ -901,6 +1000,19 @@ def derive(sc: Scenario, detail: bool = True) -> dict:
             str(pct): hop_scale * spacing_percentile(gal, pct / 100.0)
             for pct in (5, 50, 95)} if detail else None,
         hop_years=t_hop_s / YEAR_S,
+        kinematics=dict(
+            acceleration_m_s2=accel,
+            # time and distance spent speeding up plus slowing down
+            ramp_years=0.0 if accel is None else v / accel / YEAR_S,
+            ramp_parsec=0.0 if accel is None else v * v / accel / PARSEC_M,
+            hops_reaching_cruise=cruise_share,
+            extra_hop_fraction=t_hop_s / (hop_m / v) - 1.0,
+            # what standard accelerations would add to the mean hop time
+            reference=[dict(
+                acceleration_m_s2=a,
+                extra_hop_fraction=(mean_hop_seconds(gal, hop_scale, v, a)[0]
+                                    / (hop_m / v) - 1.0))
+                for a in REFERENCE_ACCELERATIONS] if detail else None),
         per_system_years=t_sys_s / YEAR_S,
         visited_per_probe=visited_per_probe,
         region_systems=region_systems,
@@ -1210,6 +1322,40 @@ def render_defaults() -> list:
     return lines
 
 
+def percent(fraction: float) -> str:
+    """A fraction as a percentage with two significant figures."""
+    return "%s%%" % sig(100.0 * fraction, 2)
+
+
+def describe_kinematics(r: dict, canonical: bool = False) -> list:
+    """Report lines on what stopping at every system costs in time."""
+    k = r["kinematics"]
+    if k["acceleration_m_s2"] is None:
+        text = ("Stops and starts are treated as instant, since no "
+                "acceleration is given. With an acceleration, in meters "
+                "per second squared, of %s the mean hop would take %s "
+                "longer (--acceleration)."
+                % (", ".join(sig(ref["acceleration_m_s2"], 3)
+                             for ref in k["reference"]),
+                   ", ".join(percent(ref["extra_hop_fraction"])
+                             for ref in k["reference"])))
+    else:
+        text = ("At an acceleration of %s (meters per second squared) a "
+                "probe spends %s and %s parsecs of every hop speeding up "
+                "and slowing down. The mean hop takes %s longer than at "
+                "steady cruise speed."
+                % (sig(k["acceleration_m_s2"], 3),
+                   fmt_duration(k["ramp_years"], canonical, 3),
+                   sig(k["ramp_parsec"], 3),
+                   percent(k["extra_hop_fraction"])))
+        if k["hops_reaching_cruise"] < 0.9995:
+            text += (" Cruise speed is reached on only %s of the hops; the "
+                     "rest are too short and turn around halfway."
+                     % percent(k["hops_reaching_cruise"]))
+    return textwrap.wrap(text, width=76, initial_indent="  ",
+                         subsequent_indent="  ")
+
+
 def describe_galaxy(r: dict) -> list:
     """Header lines saying which workload input was authoritative and
     what followed from it."""
@@ -1345,6 +1491,11 @@ def render_report(r: dict, canonical: bool = False) -> str:
     d = r["distance"]
     add("  per probe:   %s" % fmt_meters(d["per_probe_m"], canonical))
     add("  fleet total: %s" % fmt_meters(d["fleet_m"], canonical))
+    add("")
+    add("Stops and starts")
+    add("-" * 60)
+    for line in describe_kinematics(r, canonical):
+        add(line)
     add("")
     add("Coordination traffic (optical links, Physical Layer 2.2)")
     add("-" * 60)
@@ -1515,7 +1666,24 @@ def render_explain(r: dict) -> str:
         "  = %.3g x %.3g^(-1/3) x %.4g parsecs"
         % (sc["path_factor"], sc["depth"], r["galaxy"]["mean_spacing_pc"]),
         "  = %.4g parsecs  ->  %.4g years at cruise speed"
-        % (r["hop_parsec"], r["hop_years"]),
+        % (r["hop_parsec"],
+           r["hop_parsec"] * PARSEC_M / r["speed_m_per_s"] / YEAR_S),
+    ]
+    k = r["kinematics"]
+    if k["acceleration_m_s2"] is not None:
+        lines += [
+            "",
+            "stop-and-go: a hop of length d takes d / v + v / a, or "
+            "2 sqrt(d / a)",
+            "  where d is below v^2 / a; with a = %.3g meters per second "
+            "squared," % k["acceleration_m_s2"],
+            "  v / a = %.4g years and v^2 / a = %.4g parsecs"
+            % (k["ramp_years"], k["ramp_parsec"]),
+            "  mean hop time over all systems = %.4g years (%.4g of the "
+            "hops" % (r["hop_years"], k["hops_reaching_cruise"]),
+            "  reach cruise speed)",
+        ]
+    lines += [
         "",
         "time per system = hop time + dwell = %.4g + %.3g = %.4g years"
         % (r["hop_years"], sc["dwell_years"], r["per_system_years"]),
@@ -1715,6 +1883,14 @@ def build_parser() -> argparse.ArgumentParser:
                         "is what always going to the nearest unvisited "
                         "system achieves, 0.70 is the shortest possible "
                         "route (default 0.78)")
+    g.add_argument("--acceleration", type=float, metavar="NUMBER",
+                   dest="acceleration_m_s2",
+                   help="acceleration and braking of a probe in meters per "
+                        "second squared; when given, every hop takes "
+                        "longer by the time spent speeding up and slowing "
+                        "down, and hops too short to reach cruise speed "
+                        "are timed as such (no default: stops and starts "
+                        "are instant)")
     g.add_argument("--region-systems", type=float, metavar="COUNT",
                    dest="region_systems",
                    help="visited systems per completion-record region; sets "

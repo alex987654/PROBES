@@ -968,6 +968,7 @@ class TestReportWording(unittest.TestCase):
         yield "odd report", pp.render_report(odd)
         yield "odd explain", pp.render_explain(odd)
         for kwargs in [dict(), dict(stellar_density=0.1, systems=2e11),
+                       dict(acceleration_m_s2=0.003),
                        dict(galaxy_model="uniform", scale_length_kpc=3.0)]:
             sc = pp.Scenario(**kwargs)
             ranged = pp.derive(sc)
@@ -982,6 +983,142 @@ class TestReportWording(unittest.TestCase):
     def test_no_acronyms_or_jargon(self):
         for label, text in self.texts():
             self.assertEqual(banned_tokens(text), [], label)
+
+
+class TestStopAndGo(unittest.TestCase):
+    """Audit C3: hops start and end at rest."""
+
+    V = 0.05 * pp.C_M_PER_S
+    HOP_M = 0.1 ** (-1.0 / 3.0) * pp.PARSEC_M      # the audited hop
+
+    def test_leg_time_formula(self):
+        d, v = self.HOP_M, self.V
+        self.assertEqual(pp.leg_seconds(d, v, None), d / v)
+        # The audit: +0.3 percent at 1, +3.4 at 0.1, +34 at 0.01.
+        for a, extra in ((1.0, 0.0034), (0.1, 0.034), (0.01, 0.338)):
+            self.assertAlmostEqual(pp.leg_seconds(d, v, a), d / v + v / a)
+            self.assertAlmostEqual(pp.leg_seconds(d, v, a) / (d / v) - 1,
+                                   extra, delta=extra * 0.01)
+        # Cruise speed is out of reach below v^2 / d = 0.0034.
+        limit = v * v / d
+        self.assertAlmostEqual(limit, 0.00338, delta=0.00001)
+        self.assertAlmostEqual(pp.leg_seconds(d, v, limit), 2 * d / v)
+        self.assertAlmostEqual(pp.leg_seconds(d, v, limit * 0.999999)
+                               / (2 * d / v), 1.0, places=5)
+        slow = limit / 4.0
+        self.assertAlmostEqual(pp.leg_seconds(d, v, slow),
+                               2 * math.sqrt(d / slow))
+        # Half the distance speeding up, half slowing down: peak speed
+        # sqrt(a d) is then below cruise speed.
+        self.assertLess(math.sqrt(slow * d), v)
+
+    def test_uniform_disc_is_one_leg(self):
+        kwargs = dict(stellar_density=0.1, path_factor=1.0)
+        r = pp.derive(pp.Scenario(acceleration_m_s2=0.1, **kwargs))
+        self.assertAlmostEqual(
+            r["hop_years"],
+            pp.leg_seconds(self.HOP_M, self.V, 0.1) / pp.YEAR_S)
+        self.assertAlmostEqual(r["kinematics"]["extra_hop_fraction"], 0.0338,
+                               delta=0.0002)
+        self.assertEqual(r["kinematics"]["hops_reaching_cruise"], 1.0)
+        crawl = pp.derive(pp.Scenario(acceleration_m_s2=0.001, **kwargs))
+        self.assertEqual(crawl["kinematics"]["hops_reaching_cruise"], 0.0)
+        self.assertAlmostEqual(
+            crawl["hop_years"],
+            2 * math.sqrt(self.HOP_M / 0.001) / pp.YEAR_S)
+
+    def test_very_strong_engines_recover_instant_stops(self):
+        instant = pp.derive(pp.Scenario())
+        strong = pp.derive(pp.Scenario(acceleration_m_s2=1e9))
+        self.assertAlmostEqual(strong["total_years"] / instant["total_years"],
+                               1.0, places=9)
+        self.assertEqual(instant["kinematics"]["extra_hop_fraction"], 0.0)
+        self.assertEqual(instant["kinematics"]["ramp_years"], 0.0)
+
+    def test_numerical_average_matches_the_closed_form(self):
+        # Where every hop reaches cruise speed the time is linear in the
+        # hop length, so the average must equal the closed form. This
+        # checks the weights of the numerical average (they sum to one).
+        sc = pp.Scenario()
+        gal = pp.derive(sc)["galaxy"]
+        v, a = sc.speed_c * pp.C_M_PER_S, 50.0
+        for part in gal["parts"]:
+            seconds, share = pp._part_hop_seconds(part, sc.path_factor, v, a)
+            mean_m = sc.path_factor * part["mean_spacing_pc"] * pp.PARSEC_M
+            self.assertAlmostEqual(seconds / (mean_m / v + v / a), 1.0,
+                                   places=4, msg=part["kind"])
+            self.assertAlmostEqual(share, 1.0, places=4, msg=part["kind"])
+
+    def test_numerical_average_matches_sampled_systems(self):
+        # Weak engines: many hops never reach cruise speed. Compare with
+        # hops drawn from the density field itself.
+        sc = pp.Scenario(acceleration_m_s2=0.004)
+        r = pp.derive(sc)
+        gal = r["galaxy"]
+        v = sc.speed_c * pp.C_M_PER_S
+        ramp_m = v * v / 0.004
+        rng = random.Random(21)
+        xm = gal["disc_radius_pc"] / gal["scale_length_pc"]
+        total = reach = 0.0
+        count = 60_000
+        for _ in range(count):
+            if rng.random() < sc.bulge_fraction:
+                r2 = sum(rng.gauss(0.0, 1.0) ** 2 for _ in range(3))
+                density = gal["bulge_central_density"] * math.exp(-r2 / 2.0)
+            else:
+                while True:
+                    x = -math.log(rng.random() * rng.random())
+                    if x <= xm:
+                        break
+                density = gal["disc_central_density"] * math.exp(
+                    -x + math.log(rng.random()))
+            d = sc.path_factor * density ** (-1.0 / 3.0) * pp.PARSEC_M
+            total += pp.leg_seconds(d, v, 0.004)
+            reach += d >= ramp_m
+        self.assertAlmostEqual(
+            total / count / pp.YEAR_S / r["hop_years"], 1.0, delta=0.02)
+        self.assertAlmostEqual(reach / count,
+                               r["kinematics"]["hops_reaching_cruise"],
+                               delta=0.02)
+        self.assertGreater(r["kinematics"]["hops_reaching_cruise"], 0.1)
+        self.assertLess(r["kinematics"]["hops_reaching_cruise"], 0.9)
+
+    def test_weaker_engines_always_take_longer(self):
+        totals = [pp.derive(pp.Scenario(acceleration_m_s2=a))["total_years"]
+                  for a in (None, 10.0, 1.0, 0.1, 0.01, 0.001, 0.0001)]
+        self.assertEqual(totals, sorted(totals))
+        self.assertEqual(len(set(totals)), len(totals))
+
+    def test_scattering_and_detours_start_and_end_at_rest_too(self):
+        sc = pp.Scenario(acceleration_m_s2=0.05, archives="stations-only")
+        r = pp.derive(sc)
+        v = sc.speed_c * pp.C_M_PER_S
+        self.assertAlmostEqual(
+            r["phases"]["dispersal_years"],
+            pp.leg_seconds(30 * pp.KPC_M, v, 0.05) / pp.YEAR_S)
+        deposits = r["regions_per_probe"] / r["layout"]["deposit_every"]
+        self.assertAlmostEqual(
+            r["phases"]["archive_detours_years"]
+            / (deposits * 2 * pp.leg_seconds(0.5 * pp.KPC_M, v, 0.05)
+               / pp.YEAR_S), 1.0, places=12)
+
+    def test_report_quotes_reference_accelerations_when_none_is_given(self):
+        r = pp.derive(pp.Scenario())
+        refs = r["kinematics"]["reference"]
+        self.assertEqual([ref["acceleration_m_s2"] for ref in refs],
+                         list(pp.REFERENCE_ACCELERATIONS))
+        for ref in refs:
+            with_it = pp.derive(pp.Scenario(
+                acceleration_m_s2=ref["acceleration_m_s2"]))
+            self.assertAlmostEqual(
+                ref["extra_hop_fraction"],
+                with_it["kinematics"]["extra_hop_fraction"])
+        text = " ".join(pp.render_report(r).split())
+        self.assertIn("Stops and starts are treated as instant", text)
+        self.assertIn("--acceleration", text)
+        given = " ".join(pp.render_report(pp.derive(
+            pp.Scenario(acceleration_m_s2=0.01))).split())
+        self.assertIn("Cruise speed is reached on only", given)
 
 
 class TestScattering(unittest.TestCase):
