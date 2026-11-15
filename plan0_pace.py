@@ -17,6 +17,7 @@ import argparse
 import json
 import math
 import sys
+import textwrap
 from dataclasses import asdict, dataclass, fields
 from typing import Optional
 
@@ -31,6 +32,17 @@ LIGHT_YEAR_M = 9.4607304725808e15    # IAU light-year
 YEAR_S = 3.15576e7                   # Julian year in seconds
 
 MILESTONE_FRACTIONS = (0.5, 0.9, 0.99, 1.0)
+
+# Star systems in the galaxy: the one authoritative workload input. It
+# follows from galaxy-wide measurements only: about 5e10 to 6e10 solar
+# masses of stars (Licquia and Newman 2015; Bland-Hawthorn and Gerhard
+# 2016) at about 0.54 solar masses per system (0.043 solar masses per cubic
+# parsec of stars, McKee and others 2015, over 0.080 systems per cubic
+# parsec in the 10-parsec census, Reyle and others 2021). A 2025 estimate
+# of 2.6e10 solar masses (Lian and others) would halve it.
+DEFAULT_SYSTEMS = 1.0e11
+
+GALAXY_MODELS = ("exponential", "uniform")
 
 # ---------------------------------------------------------------------------
 # Archive layout presets
@@ -117,6 +129,9 @@ _NUMBER_RULES = {
     "stellar_density": (0, False, None, False),
     "disc_radius_kpc": (0, False, None, False),
     "disc_thickness_kpc": (0, False, None, False),
+    "scale_length_kpc": (0, False, None, False),
+    "bulge_fraction": (0, True, 1, False),
+    "bulge_radius_kpc": (0, False, None, False),
     "depth": (0, False, 1, True),
     "dwell_years": (0, True, None, False),
     "path_factor": (0, False, None, False),
@@ -138,8 +153,8 @@ _NUMBER_RULES = {
 _WHOLE_NUMBER_FIELDS = ("probes", "station_count", "deposit_every",
                         "neighbors")
 # Inputs that may be left unset (the layout preset or the model fills in).
-_OPTIONAL_FIELDS = ("cache_spacing_kpc", "detour_kpc", "station_count",
-                    "deposit_every")
+_OPTIONAL_FIELDS = ("systems", "stellar_density", "cache_spacing_kpc",
+                    "detour_kpc", "station_count", "deposit_every")
 
 
 @dataclass
@@ -150,10 +165,23 @@ class Scenario:
 
     probes: int = 10_000                 # Physical Layer section 1
     speed_c: float = 0.05                # fraction of light speed; section 1
-    systems: float = 2.0e11              # Milky Way literature value
-    stellar_density: float = 0.1         # systems per cubic parsec (local)
+    # Workload. The system count is authoritative; densities and the
+    # distances between systems follow from it through the galaxy model.
+    # None means DEFAULT_SYSTEMS (or density x volume if a density is given).
+    systems: Optional[float] = None
+    # A single density, systems per cubic parsec. Giving one replaces the
+    # galaxy model by a uniform disc; there is deliberately no default.
+    stellar_density: Optional[float] = None
+    galaxy_model: str = "exponential"    # or "uniform"
     disc_radius_kpc: float = 15.0        # survey disc radius; section 1
-    disc_thickness_kpc: float = 0.6      # used when deriving systems count
+    # Effective thickness: surface density over mid-plane density, twice
+    # the vertical scale height. Thin plus thick disc give 0.65 to 0.73
+    # (Bland-Hawthorn and Gerhard 2016); the measured ratio of stellar
+    # surface to volume density is 0.78 (McKee and others 2015).
+    disc_thickness_kpc: float = 0.7
+    scale_length_kpc: float = 2.6        # radial scale length of the disc
+    bulge_fraction: float = 0.15         # share of systems in the bulge
+    bulge_radius_kpc: float = 1.0        # sphere holding half the bulge
     depth: float = 1.0                   # fraction of systems visited
     dwell_years: float = 10.0            # survey + refuel stay per system
     path_factor: float = 1.0             # route efficiency multiplier
@@ -220,6 +248,9 @@ class Scenario:
                     "%s must be %s %g%s (got %r)"
                     % (name, "at most" if high_ok else "below", high,
                        " (light speed)" if name == "speed_c" else "", value))
+        if self.galaxy_model not in GALAXY_MODELS:
+            raise ValueError("unknown galaxy model %r (choices: %s)"
+                             % (self.galaxy_model, ", ".join(GALAXY_MODELS)))
         if (not isinstance(self.archives, str)
                 or self.archives not in ARCHIVE_PRESETS):
             raise ValueError("unknown archive layout %r (choices: %s)"
@@ -292,7 +323,170 @@ def resolve_layout(sc: Scenario) -> dict:
     return layout
 
 
-def _unused_inputs(sc: Scenario, layout: dict) -> list:
+# ---------------------------------------------------------------------------
+# The galaxy: one model from which both the system count and the
+# distances between neighboring systems follow
+# ---------------------------------------------------------------------------
+#
+# Route length through points of varying density (Beardwood, Halton and
+# Hammersley 1959): a tour through systems of number density n costs,
+# per system, a constant times n^(-1/3) evaluated where that system is.
+# The mean hop is therefore that constant (the path factor) times the
+# mean of n^(-1/3) taken over systems, called the "mean spacing" below.
+#
+# exponential model
+#   disc   n(R, z) = n0 exp(-R / L) exp(-|z| / h) for R up to the disc
+#          radius, with scale length L and scale height h = thickness / 2
+#   bulge  n(r) = nb exp(-r^2 / (2 s^2)), a round Gaussian cloud whose
+#          half-count radius is the bulge radius
+#   The two parts are treated as separate populations. Where they overlap
+#   the true spacing is a little shorter, so this slightly overstates the
+#   route.
+# uniform model
+#   one density throughout a disc of the given radius and thickness
+#
+# No input refers to a place inside the galaxy, so the model carries no
+# information about where the fleet starts.
+
+_HALF_COUNT_RADIUS_IN_SIGMAS = 1.5381723     # round Gaussian cloud
+
+
+def _g1(x: float) -> float:
+    """Integral of t exp(-t) from 0 to x."""
+    if x < 1e-3:
+        return x * x * (0.5 - x / 3.0 + x * x / 8.0)
+    return 1.0 - math.exp(-x) * (1.0 + x)
+
+
+def _disc_cdf(u: float, xm: float) -> float:
+    """Share of disc systems whose density is above exp(-u) times the
+    central density; u = R / L + |z| / h, and xm = disc radius / L."""
+    if u <= 0.0:
+        return 0.0
+    m = min(u, xm)
+    return (_g1(m) - math.exp(-u) * m * m / 2.0) / _g1(xm)
+
+
+def _bulge_cdf(q: float) -> float:
+    """Share of bulge systems whose density is above exp(-q) times the
+    central density; q = r^2 / (2 s^2)."""
+    if q <= 0.0:
+        return 0.0
+    root = math.sqrt(q)
+    return math.erf(root) - 2.0 * root * math.exp(-q) / math.sqrt(math.pi)
+
+
+def resolve_galaxy(sc: Scenario) -> dict:
+    """Turn the workload inputs into the system count and the spacing
+    between neighboring systems. Exactly one of the two is an input in
+    any run unless the user gives both on purpose."""
+    radius_pc = sc.disc_radius_kpc * 1e3
+    thickness_pc = sc.disc_thickness_kpc * 1e3
+    slab_volume_pc3 = math.pi * radius_pc ** 2 * thickness_pc
+
+    gal = dict(disc_radius_pc=radius_pc, thickness_pc=thickness_pc,
+               slab_volume_pc3=slab_volume_pc3)
+    if sc.stellar_density is not None:
+        # An explicit density means a uniform disc. The count follows
+        # from the disc volume unless a count was given as well.
+        implied = sc.stellar_density * slab_volume_pc3
+        gal.update(
+            model="uniform", uniform_density=sc.stellar_density,
+            systems_implied_by_density=implied,
+            systems=implied if sc.systems is None else sc.systems,
+            source="density" if sc.systems is None else "count and density")
+    else:
+        systems = DEFAULT_SYSTEMS if sc.systems is None else sc.systems
+        gal.update(model=sc.galaxy_model, systems=systems, source="count")
+        if sc.galaxy_model == "uniform":
+            gal.update(uniform_density=systems / slab_volume_pc3)
+
+    if gal["model"] == "uniform":
+        spacing = gal["uniform_density"] ** (-1.0 / 3.0)
+        gal.update(mean_spacing_pc=spacing, parts=[
+            dict(kind="uniform", share=1.0, central_spacing_pc=spacing,
+                 mean_spacing_pc=spacing)])
+        return gal
+
+    scale_pc = sc.scale_length_kpc * 1e3
+    height_pc = thickness_pc / 2.0
+    xm = radius_pc / scale_pc
+    n_bulge = sc.bulge_fraction * gal["systems"]
+    n_disc = gal["systems"] - n_bulge
+    disc_central = n_disc / (2.0 * math.pi * scale_pc ** 2 * _g1(xm)
+                             * 2.0 * height_pc)
+    disc_spacing0 = disc_central ** (-1.0 / 3.0)
+    parts = [dict(
+        kind="disc", share=1.0 - sc.bulge_fraction, xm=xm,
+        central_spacing_pc=disc_spacing0,
+        mean_spacing_pc=(disc_spacing0 * 27.0 / 8.0
+                         * _g1(2.0 * xm / 3.0) / _g1(xm)))]
+    gal.update(scale_length_pc=scale_pc, scale_height_pc=height_pc,
+               disc_systems=n_disc, disc_central_density=disc_central,
+               bulge_systems=n_bulge, bulge_central_density=0.0,
+               bulge_sigma_pc=None)
+    if n_bulge > 0.0:
+        sigma_pc = sc.bulge_radius_kpc * 1e3 / _HALF_COUNT_RADIUS_IN_SIGMAS
+        bulge_central = n_bulge / ((2.0 * math.pi) ** 1.5 * sigma_pc ** 3)
+        bulge_spacing0 = bulge_central ** (-1.0 / 3.0)
+        parts.append(dict(
+            kind="bulge", share=sc.bulge_fraction,
+            central_spacing_pc=bulge_spacing0,
+            mean_spacing_pc=bulge_spacing0 * 1.5 ** 1.5))
+        gal.update(bulge_central_density=bulge_central,
+                   bulge_sigma_pc=sigma_pc)
+    gal.update(parts=parts, mean_spacing_pc=sum(
+        part["share"] * part["mean_spacing_pc"] for part in parts))
+    return gal
+
+
+def midplane_density(gal: dict, radius_pc: float) -> float:
+    """Systems per cubic parsec in the mid-plane at a distance from the
+    galactic center (both parts of the exponential model together)."""
+    if gal["model"] == "uniform":
+        return gal["uniform_density"] if radius_pc <= gal["disc_radius_pc"] \
+            else 0.0
+    density = 0.0
+    if radius_pc <= gal["disc_radius_pc"]:
+        density += gal["disc_central_density"] * math.exp(
+            -radius_pc / gal["scale_length_pc"])
+    if gal["bulge_sigma_pc"]:
+        density += gal["bulge_central_density"] * math.exp(
+            -radius_pc ** 2 / (2.0 * gal["bulge_sigma_pc"] ** 2))
+    return density
+
+
+def spacing_cdf(gal: dict, spacing_pc: float) -> float:
+    """Share of all systems whose local spacing is below a value."""
+    total = 0.0
+    for part in gal["parts"]:
+        if spacing_pc <= part["central_spacing_pc"]:
+            continue
+        if part["kind"] == "uniform":
+            total += part["share"]
+            continue
+        # spacing = central spacing x exp(u / 3)
+        u = 3.0 * math.log(spacing_pc / part["central_spacing_pc"])
+        total += part["share"] * (_disc_cdf(u, part["xm"])
+                                  if part["kind"] == "disc"
+                                  else _bulge_cdf(u))
+    return total
+
+
+def spacing_percentile(gal: dict, share: float) -> float:
+    """Local spacing that the given share of systems stays below."""
+    low = math.log(min(part["central_spacing_pc"] for part in gal["parts"]))
+    high = low + 40.0
+    for _ in range(80):
+        mid = 0.5 * (low + high)
+        if spacing_cdf(gal, math.exp(mid)) < share:
+            low = mid
+        else:
+            high = mid
+    return math.exp(high)
+
+
+def _unused_inputs(sc: Scenario, layout: dict, gal: dict) -> list:
     """Inputs that were set to something other than their default but
     cannot change this run, each with the reason. An input that does
     nothing must not pass silently (audit A5)."""
@@ -306,6 +500,18 @@ def _unused_inputs(sc: Scenario, layout: dict) -> list:
     def note(name, reason):
         if given(name):
             unused.append(dict(input=name, reason=reason))
+
+    if gal["model"] == "uniform":
+        why = ("a single density was given, so the galaxy is a uniform disc"
+               if sc.stellar_density is not None
+               else "the uniform disc has no such shape")
+        for name in ("scale_length_kpc", "bulge_fraction",
+                     "bulge_radius_kpc"):
+            note(name, why)
+    if gal["source"] == "count and density":
+        note("disc_thickness_kpc",
+             "count and density were both given, so the disc volume is "
+             "not needed")
 
     if layout["deposit_every"] is None:
         why = "the chosen layout has no archive points"
@@ -331,18 +537,21 @@ def derive(sc: Scenario) -> dict:
     dict holding every intermediate quantity (for --explain and --json)."""
     sc.validate()
     layout = resolve_layout(sc)
+    gal = resolve_galaxy(sc)
 
     v = sc.speed_c * C_M_PER_S
 
-    # Inter-system hop: sampling at depth < 1 thins the visited set, so the
-    # effective density of *visited* systems is stellar_density * depth.
-    density_eff = sc.stellar_density * sc.depth
-    hop_m = sc.path_factor * (1.0 / density_eff) ** (1.0 / 3.0) * PARSEC_M
+    # Inter-system hop: the path factor times the mean spacing between
+    # neighboring systems. Sampling at depth < 1 thins the visited set, so
+    # the density of *visited* systems is the local density times depth
+    # and every spacing stretches by depth^(-1/3).
+    hop_scale = sc.path_factor * sc.depth ** (-1.0 / 3.0)
+    hop_m = hop_scale * gal["mean_spacing_pc"] * PARSEC_M
     t_hop_s = hop_m / v
     dwell_s = sc.dwell_years * YEAR_S
     t_sys_s = t_hop_s + dwell_s
 
-    visited_per_probe = sc.systems * sc.depth / sc.probes
+    visited_per_probe = gal["systems"] * sc.depth / sc.probes
     work_s = visited_per_probe * t_sys_s
 
     # A region cannot be larger than one probe's whole share of the
@@ -437,8 +646,14 @@ def derive(sc: Scenario) -> dict:
         scenario=asdict(sc),
         layout=layout,
         geometry=fleet_geometry(sc),
+        galaxy=gal,
+        systems=gal["systems"],
         speed_m_per_s=v,
         hop_parsec=hop_m / PARSEC_M,
+        # Local hop length that 5, 50 and 95 percent of systems stay below.
+        hop_percentiles_parsec={
+            str(pct): hop_scale * spacing_percentile(gal, pct / 100.0)
+            for pct in (5, 50, 95)},
         hop_years=t_hop_s / YEAR_S,
         per_system_years=t_sys_s / YEAR_S,
         visited_per_probe=visited_per_probe,
@@ -450,7 +665,7 @@ def derive(sc: Scenario) -> dict:
         staleness_infinite=math.isinf(tau_s),
         staleness_parts_years={name: part / YEAR_S
                                for name, part in staleness_parts.items()},
-        unused_inputs=_unused_inputs(sc, layout),
+        unused_inputs=_unused_inputs(sc, layout, gal),
         duplication_fraction=f_dup,
         # True when the formula asked for more than the ceiling although
         # archives exist: the fleet is too large for the approximation.
@@ -590,6 +805,55 @@ def flag_for(name: str) -> str:
     return name
 
 
+def _wrap(label: str, text: str) -> list:
+    """Wrap a header entry to the report width under a 12-column label."""
+    return textwrap.wrap(text, width=76, initial_indent="%-12s" % label,
+                         subsequent_indent=" " * 12)
+
+
+def describe_galaxy(r: dict) -> list:
+    """Header lines saying which workload input was authoritative and
+    what followed from it."""
+    gal = r["galaxy"]
+    sc = r["scenario"]
+    count = human_count(gal["systems"])
+    if gal["source"] == "count" and gal["model"] == "exponential":
+        text = ("%s star systems, the input the densities follow from: "
+                "%.0f%% in a disc that thins outward (scale length %.3g, "
+                "thickness %.3g kiloparsecs), %.0f%% in a central bulge"
+                % (count, 100 * (1 - sc["bulge_fraction"]),
+                   sc["scale_length_kpc"], sc["disc_thickness_kpc"],
+                   100 * sc["bulge_fraction"]))
+    elif gal["source"] == "count":
+        text = ("%s star systems, the input the density follows from, "
+                "spread evenly through the disc: %.3g per cubic parsec"
+                % (count, gal["uniform_density"]))
+    elif gal["source"] == "density":
+        text = ("a uniform disc at %.3g star systems per cubic parsec, as "
+                "given; the count follows from the disc volume: %s systems"
+                % (gal["uniform_density"], count))
+    else:
+        ratio = gal["systems"] / gal["systems_implied_by_density"]
+        text = ("%s star systems at %.3g per cubic parsec, both as given. "
+                "They do not describe the same disc: that density fills "
+                "it with %s systems, %.3g times %s than the count"
+                % (count, gal["uniform_density"],
+                   human_count(gal["systems_implied_by_density"]),
+                   ratio if ratio >= 1 else 1 / ratio,
+                   "fewer" if ratio >= 1 else "more"))
+    lines = _wrap("Galaxy:", text)
+    pct = r["hop_percentiles_parsec"]
+    if gal["model"] == "exponential":
+        lines += _wrap("", "-> hop between systems %.3g parsecs on average; "
+                           "half are below %.3g, nine in ten between %.3g "
+                           "and %.3g"
+                       % (r["hop_parsec"], pct["50"], pct["5"], pct["95"]))
+    else:
+        lines += _wrap("", "-> hop between systems %.3g parsecs"
+                       % r["hop_parsec"])
+    return lines
+
+
 def render_report(r: dict, canonical: bool = False) -> str:
     sc = r["scenario"]
     layout = r["layout"]
@@ -601,12 +865,16 @@ def render_report(r: dict, canonical: bool = False) -> str:
     add("Fleet:      %s probes at %.3g c (%s per second)"
         % (format(sc["probes"], ","), sc["speed_c"],
            si_quantity(r["speed_m_per_s"], "meter")))
-    add("Workload:   %s star systems, survey depth %.3g"
-        % (human_count(sc["systems"]), sc["depth"]))
-    add("            -> %s systems per probe, %.3g years per system"
-        % (human_count(r["visited_per_probe"]), r["per_system_years"]))
-    add("Archives:   %s - %s" % (layout["name"], layout["description"]))
-    add("            (%s)" % layout["spec_note"])
+    for line in describe_galaxy(r):
+        add(line)
+    add("Workload:   survey depth %.3g -> %s systems per probe,"
+        % (sc["depth"], human_count(r["visited_per_probe"])))
+    add("            %.3g years per system" % r["per_system_years"])
+    for line in _wrap("Archives:", "%s - %s" % (layout["name"],
+                                                layout["description"])):
+        add(line)
+    for line in _wrap("", "(%s)" % layout["spec_note"]):
+        add(line)
     add("")
     add("HEADLINE:   full survey in %s" % fmt_years(r["total_years"], canonical))
     if r["attrition"]["completed_fraction"] < 1.0:
@@ -718,6 +986,79 @@ def render_report(r: dict, canonical: bool = False) -> str:
     return "\n".join(lines)
 
 
+_PROFILE_FRACTIONS = (0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0)
+
+
+def explain_galaxy(r: dict) -> list:
+    """Formula lines for the galaxy model, with numbers substituted."""
+    gal = r["galaxy"]
+    sc = r["scenario"]
+    if gal["model"] == "uniform":
+        lines = ["galaxy: one density throughout a disc of radius %.3g and "
+                 "thickness %.3g kiloparsecs"
+                 % (sc["disc_radius_kpc"], sc["disc_thickness_kpc"]),
+                 "  disc volume = pi x radius^2 x thickness = %.4g cubic "
+                 "parsecs" % gal["slab_volume_pc3"]]
+        if gal["source"] == "count":
+            lines.append("  density = systems / volume = %.4g / %.4g = %.4g "
+                         "per cubic parsec"
+                         % (gal["systems"], gal["slab_volume_pc3"],
+                            gal["uniform_density"]))
+        elif gal["source"] == "density":
+            lines.append("  systems = density x volume = %.4g x %.4g = %.4g"
+                         % (gal["uniform_density"], gal["slab_volume_pc3"],
+                            gal["systems"]))
+        else:
+            lines.append("  systems = %.4g and density = %.4g per cubic "
+                         "parsec, both as given"
+                         % (gal["systems"], gal["uniform_density"]))
+            lines.append("  (density x volume would be %.4g systems)"
+                         % gal["systems_implied_by_density"])
+        lines.append("  mean spacing = density^(-1/3) = %.4g parsecs"
+                     % gal["mean_spacing_pc"])
+        return lines
+    xm = gal["disc_radius_pc"] / gal["scale_length_pc"]
+    lines = [
+        "galaxy: %.4g star systems (the input; densities follow from it)"
+        % gal["systems"],
+        "disc: %.4g systems, density n0 x exp(-R / L) x exp(-|z| / h) out "
+        "to R = %.3g" % (gal["disc_systems"], sc["disc_radius_kpc"]),
+        "  L = %.3g and h = thickness / 2 = %.3g kiloparsecs"
+        % (sc["scale_length_kpc"], sc["disc_thickness_kpc"] / 2),
+        "  n0 = disc systems / (2 pi L^2 x g(x) x 2 h), x = R / L = %.4g,"
+        % xm,
+        "       g(x) = 1 - exp(-x) x (1 + x) = %.4g" % _g1(xm),
+        "     = %.4g per cubic parsec at the center"
+        % gal["disc_central_density"],
+        "  mean spacing over disc systems"
+        " = n0^(-1/3) x (27/8) x g(2x/3) / g(x)",
+        "     = %.4g parsecs" % gal["parts"][0]["mean_spacing_pc"],
+    ]
+    if gal["bulge_sigma_pc"]:
+        lines += [
+            "bulge: %.4g systems, density nb x exp(-r^2 / (2 s^2)),"
+            % gal["bulge_systems"],
+            "  s = half-count radius / 1.538 = %.4g parsecs"
+            % gal["bulge_sigma_pc"],
+            "  nb = bulge systems / ((2 pi)^(3/2) x s^3) = %.4g per cubic "
+            "parsec" % gal["bulge_central_density"],
+            "  mean spacing over bulge systems = nb^(-1/3) x (3/2)^(3/2)"
+            " = %.4g parsecs" % gal["parts"][1]["mean_spacing_pc"],
+        ]
+    lines.append("mean spacing over all systems = %.4g parsecs"
+                 % gal["mean_spacing_pc"])
+    radius_kpc = sc["disc_radius_kpc"]
+    lines.append("mid-plane density, systems per cubic parsec, at the "
+                 "center, one third,")
+    lines.append("two thirds and the full disc radius (%s kiloparsecs):"
+                 % ", ".join("%.3g" % (frac * radius_kpc)
+                             for frac in _PROFILE_FRACTIONS))
+    lines.append("  " + ",  ".join(
+        "%.3g" % midplane_density(gal, frac * radius_kpc * 1e3)
+        for frac in _PROFILE_FRACTIONS))
+    return lines
+
+
 def render_explain(r: dict) -> str:
     sc = r["scenario"]
     ph = r["phases"]
@@ -727,9 +1068,13 @@ def render_explain(r: dict) -> str:
         "cruise speed  v = %.3g x speed of light = %.4g meters per second"
         % (sc["speed_c"], r["speed_m_per_s"]),
         "",
-        "inter-system hop = path_factor x (density x depth)^(-1/3)",
-        "  = %.3g x (%.3g per cubic parsec x %.3g)^(-1/3)"
-        % (sc["path_factor"], sc["stellar_density"], sc["depth"]),
+    ]
+    lines += explain_galaxy(r)
+    lines += [
+        "",
+        "inter-system hop = path_factor x depth^(-1/3) x mean spacing",
+        "  = %.3g x %.3g^(-1/3) x %.4g parsecs"
+        % (sc["path_factor"], sc["depth"], r["galaxy"]["mean_spacing_pc"]),
         "  = %.4g parsecs  ->  %.4g years at cruise speed"
         % (r["hop_parsec"], r["hop_years"]),
         "",
@@ -738,7 +1083,7 @@ def render_explain(r: dict) -> str:
         "",
         "systems per probe = total x depth / probes",
         "  = %.3g x %.3g / %s = %.4g"
-        % (sc["systems"], sc["depth"], format(sc["probes"], ","),
+        % (r["systems"], sc["depth"], format(sc["probes"], ","),
            r["visited_per_probe"]),
         "",
         "survey work = systems per probe x time per system = %.4g years"
@@ -852,20 +1197,44 @@ def build_parser() -> argparse.ArgumentParser:
                    help="cruise speed as a fraction of the speed of light "
                         "(default 0.05; studied concepts span 0.05 to 0.2)")
     g.add_argument("--systems", type=float, metavar="COUNT",
-                   help="total star systems in the galaxy (default 2e11)")
+                   help="total star systems in the galaxy; this count is "
+                        "the input from which the densities and the "
+                        "distances between systems follow (default 1e11)")
+    g.add_argument("--galaxy-model", choices=GALAXY_MODELS, metavar="NAME",
+                   dest="galaxy_model",
+                   help="how the systems are spread: 'exponential' is a "
+                        "disc that thins outward plus a central bulge; "
+                        "'uniform' spreads the same count evenly through "
+                        "the disc (default exponential)")
     g.add_argument("--stellar-density", type=float, metavar="NUMBER",
                    dest="stellar_density",
-                   help="star systems per cubic parsec, used for the "
-                        "distance between neighboring stops (default 0.1); "
-                        "if given without --systems, the system count is "
-                        "derived from disc size times this density")
+                   help="treat the galaxy as a uniform disc with this many "
+                        "star systems per cubic parsec; the system count "
+                        "is then the disc volume times this density, "
+                        "unless --systems is given as well (no default: "
+                        "normally the density follows from the count)")
     g.add_argument("--disc-radius", type=float, metavar="KILOPARSECS",
                    dest="disc_radius_kpc",
                    help="survey disc radius (default 15)")
     g.add_argument("--disc-thickness", type=float, metavar="KILOPARSECS",
                    dest="disc_thickness_kpc",
-                   help="effective disc thickness, used only when deriving "
-                        "the system count from density (default 0.6)")
+                   help="effective thickness of the disc of stars; in the "
+                        "exponential disc the density falls off above and "
+                        "below the mid-plane over half this distance "
+                        "(default 0.7)")
+    g.add_argument("--scale-length", type=float, metavar="KILOPARSECS",
+                   dest="scale_length_kpc",
+                   help="distance over which the density of the "
+                        "exponential disc falls by a factor of about 2.7 "
+                        "going outward (default 2.6)")
+    g.add_argument("--bulge-fraction", type=float, metavar="FRACTION",
+                   dest="bulge_fraction",
+                   help="share of all star systems that sit in the central "
+                        "bulge instead of the disc (default 0.15)")
+    g.add_argument("--bulge-radius", type=float, metavar="KILOPARSECS",
+                   dest="bulge_radius_kpc",
+                   help="radius of the sphere that holds half of the "
+                        "bulge's systems (default 1)")
     g.add_argument("--depth", type=float, metavar="FRACTION",
                    help="fraction of star systems each probe actually "
                         "visits; 1.0 means every system (default 1.0)")
@@ -936,6 +1305,9 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--dup-gain", type=float, metavar="NUMBER",
                    dest="dup_gain",
                    help="tuning gain on the duplication model (default 1.0)")
+    g.add_argument("--neighbors", type=int, metavar="COUNT",
+                   help="number of neighboring probes whose work a probe "
+                        "could repeat by mistake (default 6)")
 
     g = p.add_argument_group("input and output")
     g.add_argument("--scenario", metavar="FILE",
@@ -967,13 +1339,6 @@ def scenario_from_args(args: argparse.Namespace) -> Scenario:
         value = getattr(args, f.name, None)
         if value is not None:
             data[f.name] = value
-    # Derive the system count from geometry only when the user supplied a
-    # density but no explicit count (in the file or on the command line).
-    if "stellar_density" in data and "systems" not in data:
-        sc_tmp = Scenario.from_dict(data)
-        volume_pc3 = (math.pi * (sc_tmp.disc_radius_kpc * 1e3) ** 2
-                      * sc_tmp.disc_thickness_kpc * 1e3)
-        data["systems"] = sc_tmp.stellar_density * volume_pc3
     return Scenario.from_dict(data)
 
 

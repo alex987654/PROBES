@@ -5,6 +5,7 @@ import io
 import json
 import math
 import os
+import random
 import re
 import tempfile
 import unittest
@@ -41,9 +42,13 @@ class TestConstants(unittest.TestCase):
 
 class TestModel(unittest.TestCase):
     def test_default_headline_in_sane_range(self):
+        # A coarse tripwire only; the identities are pinned elsewhere.
+        # The band moves whenever a default moves, on purpose. It is now
+        # centered on 1.4 billion years: 1e11 systems in an exponential
+        # disc with a bulge, at one mean spacing per hop.
         r = pp.derive(pp.Scenario())
-        self.assertGreater(r["total_years"], 2e9)
-        self.assertLess(r["total_years"], 6e9)
+        self.assertGreater(r["total_years"], 1.1e9)
+        self.assertLess(r["total_years"], 1.8e9)
 
     def test_regime_table_cross_checks(self):
         # Physical Layer section 1: 0.27 kiloparsecs at 0.05 c takes about
@@ -150,6 +155,249 @@ class TestModel(unittest.TestCase):
         for bad in [dict(depth=0), dict(depth=1.5), dict(speed_c=1.0),
                     dict(probes=0), dict(archives="orbital-mind-lasers")]:
             with self.assertRaises(ValueError):
+                pp.derive(pp.Scenario(**bad))
+
+
+def parse(argv):
+    """Scenario exactly as the command line would build it."""
+    return pp.scenario_from_args(pp.build_parser().parse_args(argv))
+
+
+class TestOneSourceOfTruth(unittest.TestCase):
+    """Audit A1: the system count is the workload input and the density
+    follows from it, so no default can contradict another."""
+
+    def test_passing_any_default_explicitly_changes_nothing(self):
+        flags = {action.dest: action.option_strings[0]
+                 for action in pp.build_parser()._actions
+                 if action.option_strings}
+        default = pp.Scenario()
+        base = pp.derive(default)
+        base_report = pp.render_report(base)
+        checked = 0
+        for field in pp.fields(pp.Scenario):
+            value = getattr(default, field.name)
+            if value is None:
+                continue        # no default value exists to pass
+            self.assertIn(field.name, flags,
+                          "%s cannot be set from the command line"
+                          % field.name)
+            text = value if isinstance(value, str) else repr(value)
+            result = pp.derive(parse([flags[field.name], text]))
+            self.assertEqual(result, base, field.name)
+            self.assertEqual(pp.render_report(result), base_report,
+                             field.name)
+            checked += 1
+        self.assertGreaterEqual(checked, 20)
+
+    def test_default_count_passed_explicitly_changes_nothing(self):
+        base = pp.derive(pp.Scenario())
+        explicit = pp.derive(parse(["--systems", repr(pp.DEFAULT_SYSTEMS)]))
+        self.assertEqual(explicit["scenario"]["systems"], pp.DEFAULT_SYSTEMS)
+        for key in base:
+            if key != "scenario":
+                self.assertEqual(explicit[key], base[key], key)
+        self.assertEqual(pp.render_report(explicit), pp.render_report(base))
+
+    def test_scenario_file_of_defaults_changes_nothing(self):
+        data = {key: value for key, value in pp.asdict(pp.Scenario()).items()
+                if value is not None}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "defaults.json")
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(data, fh)
+            self.assertEqual(pp.derive(parse(["--scenario", path])),
+                             pp.derive(pp.Scenario()))
+
+    def test_command_line_and_scenario_object_agree(self):
+        # The old defect: the command line derived a count from the
+        # density while the Scenario class did not.
+        cases = [
+            (dict(stellar_density=0.1), ["--stellar-density", "0.1"]),
+            (dict(systems=2e11), ["--systems", "2e11"]),
+            (dict(systems=2e11, stellar_density=0.1),
+             ["--systems", "2e11", "--stellar-density", "0.1"]),
+            (dict(galaxy_model="uniform"), ["--galaxy-model", "uniform"]),
+        ]
+        for kwargs, argv in cases:
+            self.assertEqual(pp.derive(parse(argv)),
+                             pp.derive(pp.Scenario(**kwargs)), argv)
+
+    def test_density_alone_means_uniform_disc_with_derived_count(self):
+        sc = pp.Scenario(stellar_density=0.1, disc_radius_kpc=15.0,
+                         disc_thickness_kpc=0.6)
+        r = pp.derive(sc)
+        volume_pc3 = math.pi * 15_000.0 ** 2 * 600.0
+        self.assertEqual(r["galaxy"]["model"], "uniform")
+        self.assertEqual(r["galaxy"]["source"], "density")
+        self.assertAlmostEqual(r["systems"] / (0.1 * volume_pc3), 1.0)
+        self.assertAlmostEqual(r["hop_parsec"],
+                               sc.path_factor * 0.1 ** (-1.0 / 3.0))
+        self.assertAlmostEqual(r["visited_per_probe"] * sc.probes,
+                               r["systems"])
+
+    def test_count_alone_in_uniform_disc_gives_the_density(self):
+        r = pp.derive(pp.Scenario(galaxy_model="uniform"))
+        gal = r["galaxy"]
+        self.assertEqual(gal["source"], "count")
+        self.assertAlmostEqual(
+            gal["uniform_density"] * gal["slab_volume_pc3"]
+            / pp.DEFAULT_SYSTEMS, 1.0)
+        # Feeding the derived density back in lands on the same count
+        # and the same answer: there is no second source of truth.
+        again = pp.derive(pp.Scenario(stellar_density=gal["uniform_density"]))
+        self.assertAlmostEqual(again["systems"] / r["systems"], 1.0)
+        self.assertAlmostEqual(again["total_years"] / r["total_years"], 1.0)
+
+    def test_count_and_density_both_given_are_kept_and_flagged(self):
+        r = pp.derive(pp.Scenario(systems=2e11, stellar_density=0.1))
+        self.assertEqual(r["galaxy"]["source"], "count and density")
+        self.assertEqual(r["systems"], 2e11)
+        self.assertAlmostEqual(r["galaxy"]["mean_spacing_pc"],
+                               0.1 ** (-1.0 / 3.0))
+        self.assertIn("do not describe the same disc", pp.render_report(r))
+
+    def test_shape_inputs_are_reported_unused_in_a_uniform_disc(self):
+        r = pp.derive(pp.Scenario(stellar_density=0.1, scale_length_kpc=3.0,
+                                  bulge_fraction=0.3))
+        self.assertEqual({item["input"] for item in r["unused_inputs"]},
+                         {"scale_length_kpc", "bulge_fraction"})
+
+
+class TestGalaxyModel(unittest.TestCase):
+    """Audit C2: count and hop lengths follow from one density field.
+    Every closed form is checked against a direct numerical sum."""
+
+    @staticmethod
+    def disc_integral(gal, power, steps=4000):
+        """Integral of density^power over the disc, midpoint rule."""
+        scale, height = gal["scale_length_pc"], gal["scale_height_pc"]
+        dr = gal["disc_radius_pc"] / steps
+        radial = sum(2.0 * math.pi * r * math.exp(-power * r / scale) * dr
+                     for r in ((i + 0.5) * dr for i in range(steps)))
+        dz = 40.0 * height / steps
+        vertical = 2.0 * sum(math.exp(-power * z / height) * dz
+                             for z in ((i + 0.5) * dz for i in range(steps)))
+        return gal["disc_central_density"] ** power * radial * vertical
+
+    @staticmethod
+    def bulge_integral(gal, power, steps=4000):
+        sigma = gal["bulge_sigma_pc"]
+        dr = 15.0 * sigma / steps
+        return gal["bulge_central_density"] ** power * sum(
+            4.0 * math.pi * r * r
+            * math.exp(-power * r * r / (2.0 * sigma * sigma)) * dr
+            for r in ((i + 0.5) * dr for i in range(steps)))
+
+    def test_density_field_adds_up_to_the_count(self):
+        for kwargs in [dict(), dict(systems=3e10, scale_length_kpc=3.3,
+                                    disc_thickness_kpc=1.1,
+                                    bulge_fraction=0.3, bulge_radius_kpc=2.0),
+                       dict(disc_radius_kpc=6.0)]:
+            gal = pp.derive(pp.Scenario(**kwargs))["galaxy"]
+            total = self.disc_integral(gal, 1.0) + self.bulge_integral(gal,
+                                                                       1.0)
+            # places=4 leaves room for the error of the sum itself.
+            self.assertAlmostEqual(total / gal["systems"], 1.0, places=4,
+                                   msg=kwargs)
+            self.assertAlmostEqual(
+                gal["disc_systems"] + gal["bulge_systems"], gal["systems"])
+
+    def test_mean_spacing_is_the_route_integral(self):
+        # Mean of density^(-1/3) over systems
+        #   = integral of density^(2/3) over volume / number of systems.
+        gal = pp.derive(pp.Scenario())["galaxy"]
+        disc, bulge = gal["parts"]
+        self.assertAlmostEqual(
+            self.disc_integral(gal, 2.0 / 3.0) / gal["disc_systems"]
+            / disc["mean_spacing_pc"], 1.0, places=4)
+        self.assertAlmostEqual(
+            self.bulge_integral(gal, 2.0 / 3.0) / gal["bulge_systems"]
+            / bulge["mean_spacing_pc"], 1.0, places=4)
+        self.assertAlmostEqual(
+            gal["mean_spacing_pc"],
+            disc["share"] * disc["mean_spacing_pc"]
+            + bulge["share"] * bulge["mean_spacing_pc"])
+
+    def test_spacing_distribution_matches_sampled_systems(self):
+        # Draw systems from the density field itself and compare.
+        sc = pp.Scenario()
+        gal = pp.derive(sc)["galaxy"]
+        rng = random.Random(11)
+        xm = gal["disc_radius_pc"] / gal["scale_length_pc"]
+        spacings = []
+        for _ in range(60_000):
+            if rng.random() < sc.bulge_fraction:
+                r2 = sum(rng.gauss(0.0, 1.0) ** 2 for _ in range(3))
+                density = gal["bulge_central_density"] * math.exp(-r2 / 2.0)
+            else:
+                while True:     # radius: t exp(-t), cut at the disc edge
+                    x = -math.log(rng.random() * rng.random())
+                    if x <= xm:
+                        break
+                w = -math.log(rng.random())
+                density = gal["disc_central_density"] * math.exp(-x - w)
+            spacings.append(density ** (-1.0 / 3.0))
+        spacings.sort()
+        self.assertAlmostEqual(
+            sum(spacings) / len(spacings) / gal["mean_spacing_pc"], 1.0,
+            delta=0.02)
+        for share in (0.05, 0.25, 0.5, 0.75, 0.95):
+            sampled = spacings[int(share * len(spacings))]
+            self.assertAlmostEqual(
+                pp.spacing_percentile(gal, share) / sampled, 1.0, delta=0.02,
+                msg=share)
+
+    def test_percentile_inverts_the_distribution(self):
+        for kwargs in [dict(), dict(bulge_fraction=0.0),
+                       dict(galaxy_model="uniform")]:
+            gal = pp.derive(pp.Scenario(**kwargs))["galaxy"]
+            self.assertEqual(pp.spacing_cdf(gal, 1e-9), 0.0)
+            self.assertAlmostEqual(pp.spacing_cdf(gal, 1e9), 1.0)
+            if gal["model"] == "uniform":
+                continue
+            values = [pp.spacing_percentile(gal, share)
+                      for share in (0.05, 0.5, 0.95)]
+            self.assertEqual(values, sorted(values))
+            for share, value in zip((0.05, 0.5, 0.95), values):
+                self.assertAlmostEqual(pp.spacing_cdf(gal, value), share,
+                                       places=9)
+
+    def test_disc_density_falls_with_the_scale_length(self):
+        gal = pp.derive(pp.Scenario(bulge_fraction=0.0))["galaxy"]
+        self.assertEqual(len(gal["parts"]), 1)
+        inner = pp.midplane_density(gal, 2_000.0)
+        outer = pp.midplane_density(gal, 14_000.0)
+        self.assertAlmostEqual(inner / outer, math.exp(12.0 / 2.6))
+        self.assertAlmostEqual(inner / outer, 101.0, delta=0.5)
+        self.assertEqual(pp.midplane_density(gal, 15_001.0), 0.0)
+
+    def test_hop_identities(self):
+        sc = pp.Scenario(path_factor=0.9)
+        r = pp.derive(sc)
+        self.assertAlmostEqual(
+            r["hop_parsec"], 0.9 * r["galaxy"]["mean_spacing_pc"])
+        self.assertAlmostEqual(
+            r["hop_years"],
+            r["hop_parsec"] * pp.PARSEC_M / pp.LIGHT_YEAR_M / sc.speed_c)
+        # Visiting one system in eight doubles every hop.
+        thin = pp.derive(pp.Scenario(path_factor=0.9, depth=0.125))
+        self.assertAlmostEqual(thin["hop_parsec"], 2.0 * r["hop_parsec"])
+        for pct in ("5", "50", "95"):
+            self.assertAlmostEqual(thin["hop_percentiles_parsec"][pct],
+                                   2.0 * r["hop_percentiles_parsec"][pct])
+        # A uniform disc has one spacing: density^(-1/3).
+        flat = pp.derive(pp.Scenario(stellar_density=0.08, path_factor=1.0))
+        self.assertAlmostEqual(flat["hop_parsec"], 0.08 ** (-1.0 / 3.0))
+        self.assertAlmostEqual(flat["hop_parsec"], 2.32, delta=0.005)
+
+    def test_unknown_galaxy_model_rejected(self):
+        with self.assertRaises(ValueError):
+            pp.derive(pp.Scenario(galaxy_model="spiral"))
+        for bad in [dict(bulge_fraction=1.0), dict(bulge_fraction=-0.1),
+                    dict(scale_length_kpc=0), dict(bulge_radius_kpc=0),
+                    dict(systems=0), dict(stellar_density=-1)]:
+            with self.assertRaises(ValueError, msg=bad):
                 pp.derive(pp.Scenario(**bad))
 
 
