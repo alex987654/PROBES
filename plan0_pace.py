@@ -16,9 +16,10 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import random
 import sys
 import textwrap
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, fields, replace
 from typing import Optional
 
 # ---------------------------------------------------------------------------
@@ -329,6 +330,222 @@ def resolve_layout(sc: Scenario) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Defaults, where they come from, and how far they can plausibly be off
+# ---------------------------------------------------------------------------
+#
+# One row per scenario input:
+#   (name, low, high, scale, varied, source)
+# low/high  plausible range, or None where the value is a choice of the
+#           plan rather than something uncertain
+# scale     "log" draws evenly in the logarithm (ranges spanning factors),
+#           "linear" draws evenly in the value
+# varied    True for the inputs that --uncertainty varies by default: the
+#           uncertain ones that move the survey time
+# The ranges are illustrative judgments from the sources named, not
+# measured error bars.
+
+INPUT_TABLE = [
+    ("probes", None, None, None, False,
+     "the plan (Physical Layer section 1)"),
+    ("speed_c", 0.05, 0.2, "log", True,
+     "nominal speed and the span of studied probe concepts (Physical "
+     "Layer sections 1 and 5)"),
+    ("systems", 5e10, 1.2e11, "log", True,
+     "stellar mass of the galaxy, 2.6e10 to 6.1e10 solar masses (Lian and "
+     "others 2025; Licquia and Newman 2015), over 0.54 solar masses per "
+     "system (McKee and others 2015; Reyle and others 2021)"),
+    ("stellar_density", None, None, None, False,
+     "not used unless given; the census of systems within 10 parsecs "
+     "counts 0.080 per cubic parsec (Reyle and others 2021)"),
+    ("galaxy_model", None, None, None, False,
+     "disc that thins outward plus a central bulge"),
+    ("disc_radius_kpc", None, None, None, False,
+     "Physical Layer section 1"),
+    ("disc_thickness_kpc", 0.6, 0.8, "linear", True,
+     "surface density over mid-plane density of the stars, 0.65 to 0.78 "
+     "(Bland-Hawthorn and Gerhard 2016; McKee and others 2015)"),
+    ("scale_length_kpc", 2.1, 3.1, "linear", True,
+     "2.6 plus or minus 0.5 (Bland-Hawthorn and Gerhard 2016)"),
+    ("bulge_fraction", 0.1, 0.3, "linear", True,
+     "0.15 by mass (Licquia and Newman 2015); other estimates reach 0.3"),
+    ("bulge_radius_kpc", 0.5, 2.0, "log", True,
+     "assumption, order of magnitude only"),
+    ("depth", None, None, None, False,
+     "the plan surveys every system"),
+    ("dwell_years", 1.0, 1000.0, "log", True,
+     "assumption; no study fixes the stay per system"),
+    ("path_factor", 0.70, 1.0, "linear", True,
+     "1.0 is one mean spacing per hop, an upper bound; the shortest "
+     "route through random points costs 0.70 (Cerf and others 1997)"),
+    ("region_systems", None, None, None, False,
+     "assumption; the specification fixes no region size"),
+    ("dispersal_leg_kpc", None, None, None, False,
+     "Physical Layer section 4.5"),
+    ("envelope_factor", None, None, None, False,
+     "assumption"),
+    ("bitrate_bps", 0.1, 1.0, "log", False,
+     "link budget of Physical Layer section 2.2"),
+    ("message_bytes", None, None, None, False,
+     "Physical Layer section 2.2"),
+    ("archives", None, None, None, False,
+     "the doctrine layout (Physical Layer section 3)"),
+    ("cache_spacing_kpc", None, None, None, False,
+     "set by the archive layout"),
+    ("detour_kpc", None, None, None, False,
+     "set by the archive layout"),
+    ("station_count", None, None, None, False,
+     "set by the archive layout"),
+    ("consolidation_years", None, None, None, False,
+     "Physical Layer section 1"),
+    ("deposit_every", None, None, None, False,
+     "set by the archive layout"),
+    ("attrition_per_year", None, None, None, False,
+     "assumption: no probe is ever lost"),
+    ("dup_cap", None, None, None, False,
+     "tuning of the duplication estimate, not measured"),
+    ("dup_gain", None, None, None, False,
+     "tuning of the duplication estimate, not measured"),
+    ("neighbors", None, None, None, False,
+     "Physical Layer section 4.3"),
+]
+
+DEFAULT_DRAWS = 2000
+DEFAULT_SEED = 1
+RANGE_SCALES = ("log", "linear")
+
+
+def builtin_ranges() -> dict:
+    """Plausible ranges of the inputs that --uncertainty varies."""
+    return {name: dict(low=low, high=high, scale=scale)
+            for name, low, high, scale, varied, _ in INPUT_TABLE if varied}
+
+
+def normalize_ranges(raw) -> dict:
+    """Check ranges read from a scenario file and bring them to one form:
+    {input: {"low": .., "high": .., "scale": "log" or "linear"}}; an
+    input mapped to None is dropped from the built-in set."""
+    if not isinstance(raw, dict):
+        raise ValueError('"ranges" must map input names to [low, high]')
+    default_scale = {name: scale for name, _, _, scale, _, _ in INPUT_TABLE}
+    ranges = {}
+    for name, spec in raw.items():
+        if name not in _NUMBER_RULES:
+            raise ValueError(
+                "no range can be given for %r (numeric inputs: %s)"
+                % (name, ", ".join(sorted(_NUMBER_RULES))))
+        if spec is None:
+            ranges[name] = None
+            continue
+        scale = default_scale.get(name) or "linear"
+        if isinstance(spec, (list, tuple)) and len(spec) == 2:
+            low, high = spec
+        elif isinstance(spec, dict) and set(spec) <= {"low", "high", "scale"} \
+                and "low" in spec and "high" in spec:
+            low, high, scale = spec["low"], spec["high"], spec.get("scale",
+                                                                   scale)
+        else:
+            raise ValueError(
+                'the range of %s must be [low, high] or {"low": .., '
+                '"high": .., "scale": "log" or "linear"}' % name)
+        for end in (low, high):
+            if (isinstance(end, bool) or not isinstance(end, (int, float))
+                    or not math.isfinite(end)):
+                raise ValueError("the range of %s needs two finite numbers "
+                                 "(got %r)" % (name, spec))
+        if not low < high:
+            raise ValueError("the range of %s must run from a lower to a "
+                             "higher value (got %r)" % (name, spec))
+        if scale not in RANGE_SCALES:
+            raise ValueError("the scale of %s must be one of: %s (got %r)"
+                             % (name, ", ".join(RANGE_SCALES), scale))
+        if scale == "log" and low <= 0:
+            raise ValueError("a log range of %s must start above 0 (got %r)"
+                             % (name, spec))
+        ranges[name] = dict(low=float(low), high=float(high), scale=scale)
+    return ranges
+
+
+def _set_input(sc: Scenario, name: str, value: float) -> Scenario:
+    if name in _WHOLE_NUMBER_FIELDS:
+        value = int(round(value))
+    return replace(sc, **{name: value})
+
+
+def _percentile(ordered: list, percent: float) -> float:
+    """Percentile of an ascending list, interpolating between neighbors;
+    unbounded entries (surveys that never finish) sort last."""
+    position = percent / 100.0 * (len(ordered) - 1)
+    below = int(math.floor(position))
+    above = min(below + 1, len(ordered) - 1)
+    weight = position - below
+    if weight == 0.0 or ordered[below] == ordered[above]:
+        return ordered[below]
+    if math.isinf(ordered[above]):
+        return math.inf
+    return ordered[below] + weight * (ordered[above] - ordered[below])
+
+
+def run_uncertainty(sc: Scenario, ranges: dict,
+                    draws: int = DEFAULT_DRAWS,
+                    seed: int = DEFAULT_SEED) -> dict:
+    """Vary the ranged inputs together (seeded draws) and one at a time.
+
+    Returns the 5th, 50th and 95th percentile of the full-survey time over
+    the draws, and for every ranged input the survey time at each end of
+    its range with all other inputs at their set values."""
+    if isinstance(draws, bool) or not isinstance(draws, int) or draws < 1:
+        raise ValueError("draws must be a whole number of at least 1")
+    order = [f.name for f in fields(Scenario)]
+    names = sorted((name for name, spec in ranges.items() if spec),
+                   key=order.index)
+    if not names:
+        raise ValueError("no input has a range to vary")
+
+    one_at_a_time = []
+    for name in names:
+        spec = ranges[name]
+        ends = []
+        for end in ("low", "high"):
+            try:
+                ends.append(derive(_set_input(sc, name, spec[end]),
+                                   detail=False)["total_years"])
+            except ValueError as exc:
+                raise ValueError("the %s end of the range of %s is not a "
+                                 "usable value: %s" % (end, name, exc))
+        central = getattr(sc, name)
+        one_at_a_time.append(dict(
+            input=name, low=spec["low"], high=spec["high"],
+            scale=spec["scale"], total_years_at_low=ends[0],
+            total_years_at_high=ends[1],
+            set_value_inside=(central is None
+                              or spec["low"] <= central <= spec["high"])))
+
+    rng = random.Random(seed)
+    totals = []
+    for _ in range(draws):
+        drawn = sc
+        for name in names:
+            spec = ranges[name]
+            if spec["scale"] == "log":
+                value = math.exp(rng.uniform(math.log(spec["low"]),
+                                             math.log(spec["high"])))
+            else:
+                value = rng.uniform(spec["low"], spec["high"])
+            drawn = _set_input(drawn, name, value)
+        totals.append(derive(drawn, detail=False)["total_years"])
+    totals.sort()
+    low, median, high = (_percentile(totals, p) for p in (5, 50, 95))
+    return dict(
+        draws=draws, seed=seed,
+        ranges={name: ranges[name] for name in names},
+        percentiles_years={"5": low, "50": median, "95": high},
+        spread_factor=(high / low if math.isfinite(high) and low > 0
+                       else math.inf),
+        unfinished_share=sum(1 for t in totals if math.isinf(t)) / draws,
+        one_at_a_time=one_at_a_time)
+
+
+# ---------------------------------------------------------------------------
 # The galaxy: one model from which both the system count and the
 # distances between neighboring systems follow
 # ---------------------------------------------------------------------------
@@ -537,9 +754,11 @@ def _unused_inputs(sc: Scenario, layout: dict, gal: dict) -> list:
 # ---------------------------------------------------------------------------
 
 
-def derive(sc: Scenario) -> dict:
+def derive(sc: Scenario, detail: bool = True) -> dict:
     """Compute the pace estimate. Pure function of the scenario; returns a
-    dict holding every intermediate quantity (for --explain and --json)."""
+    dict holding every intermediate quantity (for --explain and --json).
+    detail=False skips the hop-length percentiles, the one costly extra,
+    for the many repeated runs of the uncertainty mode."""
     sc.validate()
     layout = resolve_layout(sc)
     gal = resolve_galaxy(sc)
@@ -658,7 +877,7 @@ def derive(sc: Scenario) -> dict:
         # Local hop length that 5, 50 and 95 percent of systems stay below.
         hop_percentiles_parsec={
             str(pct): hop_scale * spacing_percentile(gal, pct / 100.0)
-            for pct in (5, 50, 95)},
+            for pct in (5, 50, 95)} if detail else None,
         hop_years=t_hop_s / YEAR_S,
         per_system_years=t_sys_s / YEAR_S,
         visited_per_probe=visited_per_probe,
@@ -750,36 +969,116 @@ _SI_PREFIXES = [(1e24, "yotta"), (1e21, "zetta"), (1e18, "exa"),
                 (1e6, "mega"), (1e3, "kilo"), (1.0, "")]
 
 
-def si_quantity(value: float, unit: str) -> str:
+def sig(value: float, digits: int = 3) -> str:
+    """A number rounded to so many significant figures, written without
+    an exponent wherever that stays readable. At three figures and more,
+    closing zeros are dropped (20, not 20.0); at two figures both are
+    kept (6.0, not 6), since there the count of figures is the message."""
+    if value == 0:
+        return "0"
+    if not 1e-4 <= abs(value) < 1e15:
+        return "%.*g" % (digits, value)
+    exponent = math.floor(math.log10(abs(value)))
+    rounded = round(value, digits - 1 - exponent)
+    exponent = math.floor(math.log10(abs(rounded)))     # 999.6 -> 1000
+    text = "%.*f" % (max(0, digits - 1 - exponent), rounded)
+    if digits >= 3 and "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text
+
+
+def si_quantity(value: float, unit: str, digits: int = 3) -> str:
     if value == 0:
         return "0 %ss" % unit
     if math.isinf(value):
         return "unbounded"
     for factor, prefix in _SI_PREFIXES:
         if value >= factor:
-            return "%.3g %s%ss" % (value / factor, prefix, unit)
-    return "%.3g %ss" % (value, unit)
+            return "%s %s%ss" % (sig(value / factor, digits), prefix, unit)
+    return "%s %ss" % (sig(value, digits), unit)
 
 
-def human_count(value: float) -> str:
+_COUNT_WORDS = [(1e12, "trillion"), (1e9, "billion"), (1e6, "million"),
+                (1e3, "thousand")]
+
+
+def human_count(value: float, digits: int = 3) -> str:
     if math.isinf(value):
         return "unbounded"
-    for factor, word in [(1e12, "trillion"), (1e9, "billion"),
-                         (1e6, "million"), (1e3, "thousand")]:
+    for factor, word in _COUNT_WORDS:
         if abs(value) >= factor:
-            return "%.3g %s" % (value / factor, word)
-    return "%.3g" % value
+            return "%s %s" % (sig(value / factor, digits), word)
+    return sig(value, digits)
 
 
-def fmt_years(years: float, canonical: bool = False) -> str:
+def fmt_years(years: float, canonical: bool = False, digits: int = 3) -> str:
     if years is None:
         return "not reached"
     if math.isinf(years):
         return "never (fleet exhausted)"
     seconds = years * YEAR_S
     if canonical:
-        return si_quantity(seconds, "second")
-    return "%s years (%s)" % (human_count(years), si_quantity(seconds, "second"))
+        return si_quantity(seconds, "second", digits)
+    return "%s years (%s)" % (human_count(years, digits),
+                              si_quantity(seconds, "second", digits))
+
+
+def fmt_span(low_years: float, high_years: float,
+             canonical: bool = False, digits: int = 2) -> str:
+    """Two durations in one shared unit: '0.35 to 6.1 billion years'."""
+    ends = [low_years, high_years]
+    finite = [abs(y) for y in ends if y is not None and math.isfinite(y)]
+    if not finite:
+        return "never"
+    scale, unit = 1.0, "years"
+    if canonical:
+        top = max(finite) * YEAR_S
+        scale, unit = YEAR_S, "seconds"
+        for factor, prefix in _SI_PREFIXES:
+            if top >= factor:
+                scale, unit = YEAR_S / factor, prefix + "seconds"
+                break
+    else:
+        for factor, word in _COUNT_WORDS:
+            if max(finite) >= factor:
+                scale, unit = 1.0 / factor, word + " years"
+                break
+    words = ["never" if y is None or math.isinf(y) else sig(y * scale, digits)
+             for y in ends]
+    if words[1] == "never":
+        return "%s %s to never" % (words[0], unit)
+    return "%s to %s %s" % (words[0], words[1], unit)
+
+
+def fmt_duration(years: float, canonical: bool = False,
+                 digits: int = 2) -> str:
+    """One duration in one unit: years, or seconds if canonical."""
+    if years is None or math.isinf(years):
+        return "never"
+    if canonical:
+        return si_quantity(years * YEAR_S, "second", digits)
+    return "%s years" % human_count(years, digits)
+
+
+def fmt_number(value) -> str:
+    """An input value as a reader would write it."""
+    if value is None:
+        return "none"
+    if isinstance(value, str):
+        return value
+    if abs(value) >= 1e6:
+        return human_count(value)
+    return sig(value, 3)
+
+
+def fmt_number_span(low: float, high: float) -> str:
+    """Two input values, sharing the count word when both are large:
+    '50 to 120 billion'."""
+    for factor, word in _COUNT_WORDS[:3]:
+        if abs(high) >= factor and abs(low) >= factor / 1e3:
+            return "%s to %s %s" % (sig(low / factor, 3),
+                                    sig(high / factor, 3), word)
+    return "%s to %s" % (sig(low, 3), sig(high, 3))
 
 
 def fmt_kiloparsecs(kpc: float, canonical: bool = False) -> str:
@@ -815,6 +1114,71 @@ def _wrap(label: str, text: str) -> list:
     """Wrap a header entry to the report width under a 12-column label."""
     return textwrap.wrap(text, width=76, initial_indent="%-12s" % label,
                          subsequent_indent=" " * 12)
+
+
+def render_ranges(u: dict, canonical: bool = False) -> list:
+    """The uncertainty section: every ranged input on its own, then all
+    of them together."""
+    lines = ["Input ranges, and the full survey with each varied alone",
+             "-" * 60]
+    for row in u["one_at_a_time"]:
+        lines.append("  %-22s %-27s %s" % (
+            flag_for(row["input"]),
+            "%s, %s" % (fmt_number_span(row["low"], row["high"]),
+                        row["scale"]),
+            fmt_span(row["total_years_at_low"], row["total_years_at_high"],
+                     canonical)))
+    pct = u["percentiles_years"]
+    lines.append("  all varied together (%s draws, seed %d):"
+                 % (format(u["draws"], ","), u["seed"]))
+    lines.append("    %-28s %s" % ("5 to 95 percent interval",
+                                   fmt_span(pct["5"], pct["95"], canonical)))
+    lines.append("    %-28s %s" % ("median",
+                                   fmt_duration(pct["50"], canonical)))
+    if math.isfinite(u["spread_factor"]):
+        lines.append("    %-28s %s" % ("ratio of the two ends",
+                                       sig(u["spread_factor"], 2)))
+    if u["unfinished_share"] > 0:
+        lines.append("    the fleet is exhausted before the end in %s%% of "
+                     "the draws" % sig(100 * u["unfinished_share"], 2))
+    outside = [flag_for(row["input"]) for row in u["one_at_a_time"]
+               if not row["set_value_inside"]]
+    if outside:
+        lines += textwrap.wrap(
+            "the value set for %s lies outside its range, so the headline "
+            "is not a typical draw" % ", ".join(outside), width=76,
+            initial_indent="    ", subsequent_indent="    ")
+    lines += textwrap.wrap(
+        "Draws are even in the logarithm where a range is marked log and "
+        "even in the value where it is marked linear. The ranges are "
+        "judgments, so the interval shows how far the inputs can move the "
+        "answer; it is not a probability of anything.", width=76,
+        initial_indent="  ", subsequent_indent="  ")
+    return lines
+
+
+def render_defaults() -> list:
+    """Every default with its plausible range and where it comes from."""
+    default = Scenario()
+    lines = [
+        "DEFAULTS, THEIR SOURCES AND PLAUSIBLE RANGES",
+        "=" * 60,
+        "Inputs marked * are the ones --uncertainty varies. Ranges are",
+        "judgments from the sources named, not measured error bars.",
+        "",
+    ]
+    for name, low, high, scale, varied, source in INPUT_TABLE:
+        value = getattr(default, name)
+        if name == "systems":
+            value = DEFAULT_SYSTEMS
+        head = "%-22s %s" % (flag_for(name), fmt_number(value))
+        if low is not None:
+            head += "   range %s%s" % (fmt_number_span(low, high),
+                                       " *" if varied else "")
+        lines.append(head)
+        lines += textwrap.wrap(source, width=72, initial_indent="    ",
+                               subsequent_indent="    ")
+    return lines
 
 
 def describe_galaxy(r: dict) -> list:
@@ -882,12 +1246,31 @@ def render_report(r: dict, canonical: bool = False) -> str:
     for line in _wrap("", "(%s)" % layout["spec_note"]):
         add(line)
     add("")
-    add("HEADLINE:   full survey in %s" % fmt_years(r["total_years"], canonical))
+    if r["fleet_exhausted"]:
+        add("HEADLINE:   the survey never finishes (fleet exhausted)")
+    else:
+        # Two significant figures: the inputs do not support a third.
+        add("HEADLINE:   full survey in about %s"
+            % fmt_years(r["total_years"], canonical, digits=2))
+    u = r.get("uncertainty")
+    if u:
+        pct = u["percentiles_years"]
+        text = ("5 to 95 percent interval: %s; median %s (%s seeded draws "
+                "over the input ranges listed below)"
+                % (fmt_span(pct["5"], pct["95"], canonical),
+                   fmt_duration(pct["50"], canonical),
+                   format(u["draws"], ",")))
+    else:
+        text = ("no input ranges were varied; add --uncertainty for the "
+                "5 to 95 percent interval")
+    for line in _wrap("", text):
+        add(line)
     if r["scale_estimate"] and not r["fleet_exhausted"]:
-        add("            a scale estimate only: past %s the galaxy"
-            % fmt_years(SCALE_ESTIMATE_YEARS, canonical))
-        add("            itself turns, shears and forms new stars, which is")
-        add("            not modeled (see Caveats)")
+        for line in _wrap("", "a scale estimate only: past %s the galaxy "
+                              "itself turns, shears and forms new stars, "
+                              "which is not modeled (see Caveats)"
+                          % fmt_duration(SCALE_ESTIMATE_YEARS, canonical, 1)):
+            add(line)
     if r["attrition"]["completed_fraction"] < 1.0:
         add("            WARNING: attrition exhausts the fleet at %.1f%%"
             " completion" % (100 * r["attrition"]["completed_fraction"]))
@@ -910,7 +1293,11 @@ def render_report(r: dict, canonical: bool = False) -> str:
     add("-" * 60)
     for m in r["milestones"]:
         add("  %4.0f%%   %s" % (100 * m["fraction"],
-                                fmt_years(m["years"], canonical)))
+                                fmt_years(m["years"], canonical, digits=2)))
+    if u:
+        add("")
+        for line in render_ranges(u, canonical):
+            add(line)
     add("")
     add("Distance traveled")
     add("-" * 60)
@@ -1129,6 +1516,9 @@ def render_explain(r: dict) -> str:
         "TOTAL = dispersal + work x (1 + duplication) + detours",
         "      = %.4g years" % r["total_years"],
     ]
+    if r.get("uncertainty"):
+        lines += [""] + render_ranges(r["uncertainty"])
+    lines += [""] + render_defaults()
     return "\n".join(lines)
 
 
@@ -1177,6 +1567,22 @@ what the output shows:
   appear in years and also in seconds; distances in light-years and
   also in meters (one light-year is about 9.46e15 meters; one parsec
   is about 3.26 light-years; one kiloparsec is one thousand parsecs).
+  The headline is rounded to two digits, because the inputs do not
+  support a third.
+
+how sure the answer is (--uncertainty, or "ranges" in a scenario file):
+  Most inputs are known only roughly. With --uncertainty the calculator
+  redraws the uncertain inputs many times within their plausible ranges
+  and prints, beside the headline, the middle outcome and the interval
+  that holds nine draws in ten (the 5 to 95 percent interval), followed
+  by a table of what each input does on its own. The draws are seeded,
+  so a run can be repeated exactly. A scenario file can set its own
+  ranges, which also switches this mode on:
+      {"speed_c": 0.05,
+       "ranges": {"systems": [5e10, 1.2e11],
+                  "dwell_years": {"low": 1, "high": 1000, "scale": "log"}}}
+  Mapping an input to null inside "ranges" leaves it fixed.
+  --explain lists every default with its source and plausible range.
 
 examples:
   python plan0_pace.py
@@ -1185,7 +1591,10 @@ examples:
       visit one system in ten, at double cruise speed, with staffed
       archive stations only
   python plan0_pace.py --explain
-      print every formula with the numbers substituted in
+      print every formula with the numbers substituted in, then every
+      default with its source and plausible range
+  python plan0_pace.py --uncertainty
+      add the interval that the plausible input ranges give
   python plan0_pace.py --scenario my.json --json out.json
       load assumptions from a file, write full results to a file
 """
@@ -1320,6 +1729,20 @@ def build_parser() -> argparse.ArgumentParser:
                    help="number of neighboring probes whose work a probe "
                         "could repeat by mistake (default 6)")
 
+    g = p.add_argument_group("how sure the answer is")
+    g.add_argument("--uncertainty", action="store_true",
+                   help="vary the uncertain inputs over their plausible "
+                        "ranges and print the 5 to 95 percent interval "
+                        "and the middle outcome beside the headline, with "
+                        "a table of what each input does alone")
+    g.add_argument("--draws", type=int, metavar="COUNT",
+                   help="number of random draws for the interval "
+                        "(default %d)" % DEFAULT_DRAWS)
+    g.add_argument("--seed", type=int, metavar="NUMBER",
+                   help="starting number for the random draws; the same "
+                        "number repeats the same draws (default %d)"
+                        % DEFAULT_SEED)
+
     g = p.add_argument_group("input and output")
     g.add_argument("--scenario", metavar="FILE",
                    help="load assumptions from a file in JavaScript Object "
@@ -1328,7 +1751,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="also write the full results, machine-readable, to "
                         "this file (JavaScript Object Notation format)")
     g.add_argument("--explain", action="store_true",
-                   help="print every formula with the numbers substituted")
+                   help="print every formula with the numbers substituted, "
+                        "then every default with its source and "
+                        "plausible range")
     g.add_argument("--canonical", action="store_true",
                    help="print durations only in seconds and distances only "
                         "in meters, the fleet's canonical units")
@@ -1337,7 +1762,9 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def scenario_from_args(args: argparse.Namespace) -> Scenario:
+def load_inputs(args: argparse.Namespace) -> tuple:
+    """The scenario and the input ranges (or None) exactly as the scenario
+    file and the command line give them; flags override the file."""
     data = {}
     if args.scenario:
         with open(args.scenario, "r", encoding="utf-8") as fh:
@@ -1346,11 +1773,23 @@ def scenario_from_args(args: argparse.Namespace) -> Scenario:
             raise ValueError("the scenario file must hold one object of "
                              "named values, not %s" % type(loaded).__name__)
         data.update(loaded)
+    file_ranges = data.pop("ranges", None)
     for f in fields(Scenario):
         value = getattr(args, f.name, None)
         if value is not None:
             data[f.name] = value
-    return Scenario.from_dict(data)
+    sc = Scenario.from_dict(data)
+    ranges = builtin_ranges() if getattr(args, "uncertainty", False) else None
+    if file_ranges is not None:
+        ranges = dict(ranges or {})
+        ranges.update(normalize_ranges(file_ranges))
+    if ranges is not None:
+        ranges = {name: spec for name, spec in ranges.items() if spec}
+    return sc, ranges
+
+
+def scenario_from_args(args: argparse.Namespace) -> Scenario:
+    return load_inputs(args)[0]
 
 
 def main(argv=None) -> int:
@@ -1361,8 +1800,17 @@ def main(argv=None) -> int:
             print("%-18s %s" % (name, preset["help"]))
         return 0
     try:
-        sc = scenario_from_args(args)
+        sc, ranges = load_inputs(args)
         result = derive(sc)
+        if ranges:
+            result["uncertainty"] = run_uncertainty(
+                sc, ranges,
+                DEFAULT_DRAWS if args.draws is None else args.draws,
+                DEFAULT_SEED if args.seed is None else args.seed)
+        elif args.draws is not None or args.seed is not None:
+            raise ValueError("--draws and --seed do nothing on their own; "
+                             "add --uncertainty or ranges in the scenario "
+                             "file")
     except (ValueError, OSError, ArithmeticError) as exc:
         # json.JSONDecodeError is a ValueError; ArithmeticError covers a
         # division by zero or overflow from inputs at the edge of range.

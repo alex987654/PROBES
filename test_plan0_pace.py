@@ -328,6 +328,277 @@ class TestIdentities(unittest.TestCase):
         self.assertTrue(just_above["fleet_exhausted"])
 
 
+class TestUncertainty(unittest.TestCase):
+    """Audit D: a range per input, seeded draws, a two-figure headline."""
+
+    def run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = pp.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def headline_block(self, text):
+        lines = text.splitlines()
+        at = next(i for i, line in enumerate(lines) if "HEADLINE" in line)
+        return " ".join(line.strip() for line in lines[at:lines.index("", at)])
+
+    def test_figures_are_rounded_the_way_the_report_claims(self):
+        self.assertEqual(pp.sig(978.4, 3), "978")
+        self.assertEqual(pp.sig(978.4, 2), "980")
+        self.assertEqual(pp.sig(999.6, 3), "1000")
+        self.assertEqual(pp.sig(0.2931, 2), "0.29")
+        self.assertEqual(pp.sig(45.16, 2), "45")
+        self.assertEqual(pp.sig(20.0, 3), "20")       # three: zeros dropped
+        self.assertEqual(pp.sig(6.0, 2), "6.0")       # two: both figures kept
+        self.assertEqual(pp.sig(0.0), "0")
+        self.assertEqual(pp.fmt_span(2.9e8, 6.0e9),
+                         "0.29 to 6.0 billion years")
+        self.assertEqual(pp.fmt_span(9e8, math.inf),
+                         "900 million years to never")
+        self.assertEqual(pp.fmt_span(2.9e8, 6.0e9, canonical=True),
+                         "9.2 to 190 petaseconds")
+
+    def test_headline_has_two_significant_figures(self):
+        for kwargs in [dict(), dict(speed_c=0.2), dict(systems=3.33e9),
+                       dict(dwell_years=777.0), dict(probes=123)]:
+            r = pp.derive(pp.Scenario(**kwargs))
+            block = self.headline_block(pp.render_report(r))
+            match = re.search(r"about ([0-9.]+) (\w+ )?years \(([0-9.]+) ",
+                              block)
+            self.assertIsNotNone(match, block)
+            for figure in (match.group(1), match.group(3)):
+                digits = figure.replace(".", "").lstrip("0")
+                self.assertEqual(len(digits.rstrip("0") or "0") <= 2, True,
+                                 (figure, block))
+            # The stated value is the computed one, to two figures.
+            words = {None: 1.0, "thousand ": 1e3, "million ": 1e6,
+                     "billion ": 1e9, "trillion ": 1e12}
+            stated = float(match.group(1)) * words[match.group(2)]
+            self.assertAlmostEqual(stated / r["total_years"], 1.0, delta=0.05)
+
+    def test_interval_stands_beside_the_headline_when_ranges_are_given(self):
+        code, out, _ = self.run_main(["--uncertainty"])
+        self.assertEqual(code, 0)
+        block = self.headline_block(out)
+        self.assertIn("5 to 95 percent interval:", block)
+        self.assertIn("median", block)
+        self.assertIn("2,000 seeded draws", block)
+        self.assertIn("Input ranges, and the full survey with each varied "
+                      "alone", out)
+        code, out, _ = self.run_main([])
+        block = self.headline_block(out)
+        self.assertIn("no input ranges were varied", block)
+        self.assertIn("--uncertainty", block)
+        self.assertNotIn("Input ranges, and", out)
+
+    def test_same_seed_repeats_and_other_seeds_agree(self):
+        sc = pp.Scenario()
+        ranges = pp.builtin_ranges()
+        first = pp.run_uncertainty(sc, ranges, draws=1500, seed=5)
+        again = pp.run_uncertainty(sc, ranges, draws=1500, seed=5)
+        other = pp.run_uncertainty(sc, ranges, draws=1500, seed=6)
+        self.assertEqual(first, again)
+        self.assertNotEqual(first["percentiles_years"],
+                            other["percentiles_years"])
+        # Seed-to-seed scatter at this many draws is about 2 percent at
+        # the 5th percentile and the median and 4 percent at the 95th.
+        for key in ("5", "50", "95"):
+            self.assertAlmostEqual(
+                other["percentiles_years"][key]
+                / first["percentiles_years"][key], 1.0, delta=0.25, msg=key)
+        # The order in which a file lists the ranges must not matter.
+        shuffled = dict(reversed(list(ranges.items())))
+        self.assertEqual(
+            pp.run_uncertainty(sc, shuffled, draws=1500, seed=5), first)
+
+    def test_interval_brackets_the_median_and_one_at_a_time_rows(self):
+        sc = pp.Scenario()
+        u = pp.run_uncertainty(sc, pp.builtin_ranges(), draws=1000)
+        pct = u["percentiles_years"]
+        self.assertLess(pct["5"], pct["50"])
+        self.assertLess(pct["50"], pct["95"])
+        self.assertAlmostEqual(u["spread_factor"], pct["95"] / pct["5"])
+        self.assertEqual(u["unfinished_share"], 0.0)
+        base = pp.derive(sc)["total_years"]
+        for row in u["one_at_a_time"]:
+            name = row["input"]
+            for end in ("low", "high"):
+                expected = pp.derive(pp.replace(sc, **{name: row[end]}))
+                self.assertEqual(row["total_years_at_" + end],
+                                 expected["total_years"], (name, end))
+            # No input in the default set is idle (audit A5).
+            self.assertNotEqual(row["total_years_at_low"],
+                                row["total_years_at_high"], name)
+            self.assertTrue(row["set_value_inside"], name)
+            low, high = sorted([row["total_years_at_low"],
+                                row["total_years_at_high"]])
+            self.assertLessEqual(low, base * (1 + 1e-12), name)
+            self.assertGreaterEqual(high, base * (1 - 1e-12), name)
+
+    def test_percentile_of_a_known_list(self):
+        values = [1.0, 2.0, 3.0, 4.0, 5.0]
+        self.assertEqual(pp._percentile(values, 0), 1.0)
+        self.assertEqual(pp._percentile(values, 50), 3.0)
+        self.assertEqual(pp._percentile(values, 100), 5.0)
+        self.assertAlmostEqual(pp._percentile(values, 5), 1.2)
+        self.assertAlmostEqual(pp._percentile(values, 95), 4.8)
+        self.assertEqual(pp._percentile([1.0, 2.0, math.inf], 50), 2.0)
+        self.assertEqual(pp._percentile([1.0, 2.0, math.inf], 95), math.inf)
+
+    def test_audited_scenario_reproduces_the_audit_spread(self):
+        # Audit D, on the inputs it was run against: 5th percentile 0.64,
+        # median 2.3, 95th percentile 16.7 billion years, a factor of 26.
+        sc = pp.Scenario(**TestIdentities.AUDITED)
+        ranges = pp.normalize_ranges({
+            "systems": {"low": 1e11, "high": 4e11, "scale": "log"},
+            "stellar_density": [0.07, 0.14],
+            "path_factor": [0.70, 1.0],
+            "speed_c": [0.05, 0.2],
+            "dwell_years": [1, 1000],
+        })
+        self.assertEqual(ranges["stellar_density"]["scale"], "linear")
+        self.assertEqual(ranges["speed_c"]["scale"], "log")
+        u = pp.run_uncertainty(sc, ranges, draws=20_000, seed=1)
+        pct = u["percentiles_years"]
+        self.assertAlmostEqual(pct["5"] / 0.65e9, 1.0, delta=0.05)
+        self.assertAlmostEqual(pct["50"] / 2.33e9, 1.0, delta=0.05)
+        self.assertAlmostEqual(pct["95"] / 16.8e9, 1.0, delta=0.05)
+        self.assertAlmostEqual(u["spread_factor"], 26.0, delta=2.0)
+
+    def test_scenario_file_ranges_switch_the_mode_on(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "ranged.json")
+            out_path = os.path.join(tmp, "out.json")
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump({"speed_c": 0.1, "ranges": {
+                    "systems": [5e10, 1.2e11],
+                    "dwell_years": {"low": 1, "high": 100, "scale": "log"},
+                }}, fh)
+            code, out, _ = self.run_main(
+                ["--scenario", path, "--draws", "300", "--seed", "9",
+                 "--json", out_path])
+            self.assertEqual(code, 0)
+            self.assertIn("5 to 95 percent interval:",
+                          self.headline_block(out))
+            self.assertIn("300 seeded draws", self.headline_block(out))
+            with open(out_path, encoding="utf-8") as fh:
+                result = json.load(fh)
+            u = result["uncertainty"]
+            self.assertEqual(sorted(u["ranges"]), ["dwell_years", "systems"])
+            self.assertEqual((u["draws"], u["seed"]), (300, 9))
+            self.assertEqual(result["scenario"]["speed_c"], 0.1)
+            # With the flag as well, the built-in ranges fill in the rest,
+            # and null takes one out again.
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump({"ranges": {"speed_c": None,
+                                      "dwell_years": [5, 20]}}, fh)
+            sc, ranges = pp.load_inputs(pp.build_parser().parse_args(
+                ["--scenario", path, "--uncertainty"]))
+            self.assertNotIn("speed_c", ranges)
+            self.assertEqual(ranges["dwell_years"]["high"], 20.0)
+            self.assertEqual(ranges["systems"],
+                             pp.builtin_ranges()["systems"])
+
+    def test_bad_ranges_are_rejected_by_name(self):
+        for bad in [{"warp": [1, 2]}, {"archives": [1, 2]},
+                    {"systems": [2e11, 1e11]}, {"systems": [1e11, 1e11]},
+                    {"systems": [1e11]}, {"systems": "wide"},
+                    {"systems": {"low": 1e10}},
+                    {"systems": {"low": 1e10, "high": 1e11, "shape": "x"}},
+                    {"systems": {"low": 1e10, "high": 1e11,
+                                 "scale": "cubic"}},
+                    {"dwell_years": {"low": 0, "high": 10, "scale": "log"}},
+                    {"systems": [1e10, float("inf")]}, ["systems"]]:
+            with self.assertRaises(ValueError, msg=bad):
+                pp.normalize_ranges(bad)
+        # An end of a range that the model itself cannot use.
+        with self.assertRaises(ValueError) as caught:
+            pp.run_uncertainty(pp.Scenario(), pp.normalize_ranges(
+                {"speed_c": {"low": 0.5, "high": 2.0, "scale": "linear"}}))
+        self.assertIn("speed_c", str(caught.exception))
+        with self.assertRaises(ValueError):
+            pp.run_uncertainty(pp.Scenario(), {})
+        with self.assertRaises(ValueError):
+            pp.run_uncertainty(pp.Scenario(), pp.builtin_ranges(), draws=0)
+
+    def test_draws_and_seed_alone_are_refused(self):
+        for argv in (["--draws", "50"], ["--seed", "3"]):
+            code, out, err = self.run_main(argv)
+            self.assertEqual(code, 2, argv)
+            self.assertIn("--uncertainty", err)
+            self.assertEqual(out, "")
+        code, _, err = self.run_main(["--uncertainty", "--draws", "0"])
+        self.assertEqual(code, 2)
+        self.assertIn("draws", err)
+
+    def test_losses_inside_a_range_are_counted_and_written_strictly(self):
+        sc = pp.Scenario()
+        ranges = pp.normalize_ranges(
+            {"attrition_per_year": {"low": 1e-11, "high": 1e-8,
+                                    "scale": "log"}})
+        u = pp.run_uncertainty(sc, ranges, draws=400)
+        self.assertGreater(u["unfinished_share"], 0.2)
+        self.assertLess(u["unfinished_share"], 0.8)
+        self.assertTrue(math.isinf(u["percentiles_years"]["95"]))
+        result = pp.derive(sc)
+        result["uncertainty"] = u
+        text = json.dumps(pp.json_safe(result), allow_nan=False)
+        self.assertIsNone(json.loads(text)["uncertainty"]
+                          ["percentiles_years"]["95"])
+        report = pp.render_report(result)
+        self.assertIn("to never", self.headline_block(report))
+        self.assertIn("fleet is exhausted before the end in", report)
+
+    def test_set_value_outside_its_range_is_pointed_out(self):
+        sc = pp.Scenario(dwell_years=5000.0)
+        result = pp.derive(sc)
+        result["uncertainty"] = pp.run_uncertainty(
+            sc, pp.builtin_ranges(), draws=100)
+        self.assertIn("--dwell lies outside its range",
+                      " ".join(pp.render_report(result).split()))
+
+
+class TestDefaultsTable(unittest.TestCase):
+    """Audit D: one table of defaults with source and plausible range."""
+
+    def test_every_input_has_exactly_one_row_in_field_order(self):
+        self.assertEqual([row[0] for row in pp.INPUT_TABLE],
+                         [f.name for f in pp.fields(pp.Scenario)])
+        for name, low, high, scale, varied, source in pp.INPUT_TABLE:
+            self.assertTrue(source.strip(), name)
+            if low is None:
+                self.assertFalse(varied, name)
+                continue
+            self.assertLess(low, high, name)
+            self.assertIn(scale, pp.RANGE_SCALES, name)
+
+    def test_every_default_lies_inside_its_range(self):
+        default = pp.Scenario()
+        for name, low, high, _, _, _ in pp.INPUT_TABLE:
+            value = getattr(default, name)
+            if name == "systems":
+                value = pp.DEFAULT_SYSTEMS
+            if low is not None and value is not None:
+                self.assertLessEqual(low, value, name)
+                self.assertLessEqual(value, high, name)
+
+    def test_built_in_ranges_are_the_rows_marked_varied(self):
+        ranges = pp.builtin_ranges()
+        self.assertEqual(sorted(ranges),
+                         sorted(row[0] for row in pp.INPUT_TABLE if row[4]))
+        self.assertEqual(pp.normalize_ranges(ranges), ranges)
+
+    def test_explain_prints_the_table(self):
+        text = pp.render_explain(pp.derive(pp.Scenario()))
+        self.assertIn("DEFAULTS, THEIR SOURCES AND PLAUSIBLE RANGES", text)
+        table = text[text.index("DEFAULTS, THEIR SOURCES"):]
+        for action in pp.build_parser()._actions:
+            if action.dest in {f.name for f in pp.fields(pp.Scenario)}:
+                self.assertIn(action.option_strings[0], table)
+        self.assertIn("range 50 to 120 billion *", table)
+        self.assertIn("Cerf and others 1997", table)
+
+
 class TestOneSourceOfTruth(unittest.TestCase):
     """Audit A1: the system count is the workload input and the density
     follows from it, so no default can contradict another."""
@@ -661,6 +932,17 @@ class TestReportWording(unittest.TestCase):
                                     attrition_per_year=1e-8))
         yield "odd report", pp.render_report(odd)
         yield "odd explain", pp.render_explain(odd)
+        for kwargs in [dict(), dict(stellar_density=0.1, systems=2e11),
+                       dict(galaxy_model="uniform", scale_length_kpc=3.0)]:
+            sc = pp.Scenario(**kwargs)
+            ranged = pp.derive(sc)
+            ranges = pp.builtin_ranges()
+            ranges["attrition_per_year"] = dict(low=1e-12, high=1e-8,
+                                                scale="log")
+            ranged["uncertainty"] = pp.run_uncertainty(sc, ranges, draws=200)
+            yield "ranged report", pp.render_report(ranged)
+            yield "ranged canonical", pp.render_report(ranged, canonical=True)
+            yield "ranged explain", pp.render_explain(ranged)
 
     def test_no_acronyms_or_jargon(self):
         for label, text in self.texts():
@@ -844,8 +1126,9 @@ class TestCommandLine(unittest.TestCase):
         code, out = self.run_main([])
         lines = out.splitlines()
         at = next(i for i, line in enumerate(lines) if "HEADLINE" in line)
-        self.assertIn("scale estimate", lines[at + 1])
-        self.assertLess(at + 1, lines.index("Phase breakdown"))
+        block = lines[at:lines.index("", at)]     # up to the blank line
+        self.assertIn("scale estimate", " ".join(block))
+        self.assertLess(at + len(block), lines.index("Phase breakdown"))
         self.assertTrue(pp.derive(pp.Scenario())["scale_estimate"])
         # A survey shorter than the limit carries no such label.
         short = pp.derive(pp.Scenario(systems=1e8))
