@@ -1123,6 +1123,88 @@ class TestStopAndGo(unittest.TestCase):
         self.assertIn("Cruise speed is reached on only", given)
 
 
+class TestLossThreshold(unittest.TestCase):
+    """Audit C5: the survey finishes only below a loss rate of about one
+    over the survey time, and every report says so."""
+
+    def test_threshold_solves_its_equation(self):
+        for kwargs in [dict(), dict(speed_c=0.2), dict(systems=1e9),
+                       dict(envelope_factor=300.0)]:
+            r = pp.derive(pp.Scenario(**kwargs))
+            scattering = r["phases"]["dispersal_years"]
+            survey = r["total_years"] - scattering
+            rate = r["attrition"]["threshold_per_year"]
+            self.assertAlmostEqual(
+                rate * math.exp(rate * scattering) * survey, 1.0, places=9,
+                msg=kwargs)
+            self.assertLessEqual(rate, 1.0 / survey)
+            self.assertAlmostEqual(
+                r["attrition"]["mean_life_needed_years"] * rate, 1.0)
+
+    def test_threshold_separates_finishing_from_running_out(self):
+        for kwargs in [dict(), dict(envelope_factor=300.0)]:
+            rate = pp.derive(pp.Scenario(**kwargs))["attrition"][
+                "threshold_per_year"]
+            below = pp.derive(pp.Scenario(attrition_per_year=rate * 0.999,
+                                          **kwargs))
+            above = pp.derive(pp.Scenario(attrition_per_year=rate * 1.001,
+                                          **kwargs))
+            self.assertFalse(below["fleet_exhausted"], kwargs)
+            self.assertTrue(above["fleet_exhausted"], kwargs)
+            # The threshold does not depend on the losses assumed.
+            self.assertAlmostEqual(
+                below["attrition"]["threshold_per_year"] / rate, 1.0)
+
+    def test_audited_figures(self):
+        # 3.3e-10 per year, a mean life above 3 billion years; at 1e-9
+        # the fleet finishes 33 percent.
+        base = pp.derive(pp.Scenario(**TestIdentities.AUDITED))
+        self.assertAlmostEqual(
+            base["attrition"]["threshold_per_year"] / 3.29e-10, 1.0,
+            delta=0.005)
+        self.assertAlmostEqual(
+            base["attrition"]["mean_life_needed_years"] / 3.04e9, 1.0,
+            delta=0.005)
+        lossy = pp.derive(pp.Scenario(attrition_per_year=1e-9,
+                                      **TestIdentities.AUDITED))
+        self.assertAlmostEqual(lossy["attrition"]["completed_fraction"],
+                               0.329, delta=0.001)
+        # Twice the threshold: about half the survey.
+        twice = pp.derive(pp.Scenario(
+            attrition_per_year=2 * base["attrition"]["threshold_per_year"],
+            **TestIdentities.AUDITED))
+        self.assertAlmostEqual(twice["attrition"]["completed_fraction"], 0.5,
+                               delta=0.001)
+
+    def test_fleet_left_at_the_end(self):
+        r = pp.derive(pp.Scenario(attrition_per_year=2e-10))
+        self.assertAlmostEqual(r["attrition"]["fleet_left_at_end"],
+                               math.exp(-2e-10 * r["total_years"]))
+        self.assertEqual(
+            pp.derive(pp.Scenario())["attrition"]["fleet_left_at_end"], 1.0)
+        self.assertEqual(pp.derive(pp.Scenario(attrition_per_year=1e-7))
+                         ["attrition"]["fleet_left_at_end"], 0.0)
+
+    def test_every_report_prints_the_threshold(self):
+        for kwargs in [dict(), dict(archives="none"),
+                       dict(attrition_per_year=1e-10),
+                       dict(attrition_per_year=1e-8)]:
+            r = pp.derive(pp.Scenario(**kwargs))
+            text = " ".join(pp.render_report(r).split())
+            self.assertIn("The survey can finish only if the loss rate "
+                          "stays below %s per year"
+                          % pp.sig(r["attrition"]["threshold_per_year"], 2),
+                          text, kwargs)
+            self.assertIn("Not modeled: records lost between deposits", text)
+        self.assertIn("No probe is assumed to be lost", " ".join(
+            pp.render_report(pp.derive(pp.Scenario())).split()))
+        lossy = pp.derive(pp.Scenario(attrition_per_year=1e-8))
+        self.assertIn(
+            "the fleet runs out with %s of the survey done"
+            % pp.percent(lossy["attrition"]["completed_fraction"]),
+            " ".join(pp.render_report(lossy).split()))
+
+
 class TestPropellant(unittest.TestCase):
     """Audit C4: every stop costs propellant that grows fast with speed."""
 

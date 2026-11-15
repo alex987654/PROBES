@@ -998,6 +998,15 @@ def derive(sc: Scenario, detail: bool = True) -> dict:
     attrition = _apply_attrition(sc, dispersal_s, survey_s)
     survey_s_effective = attrition["survey_seconds"]
     total_s = dispersal_s + survey_s_effective
+    threshold_s = loss_rate_threshold(dispersal_s, survey_s)
+    attrition.update(
+        rate_per_year=sc.attrition_per_year,
+        # the survey can finish only below this loss rate
+        threshold_per_year=threshold_s * YEAR_S,
+        mean_life_needed_years=1.0 / (threshold_s * YEAR_S),
+        # share of the fleet still working when the survey ends
+        fleet_left_at_end=(0.0 if math.isinf(total_s) else math.exp(
+            -sc.attrition_per_year * total_s / YEAR_S)))
 
     milestones = []
     for frac in MILESTONE_FRACTIONS:
@@ -1130,6 +1139,24 @@ def _apply_attrition(sc: Scenario, dispersal_s: float,
                     completed_fraction=capacity_probe_s / needed_probe_s)
     t = -math.log(1.0 - needed_probe_s * lam / fleet_at_start) / lam
     return dict(active=True, survey_seconds=t, completed_fraction=1.0)
+
+
+def loss_rate_threshold(dispersal_s: float, survey_s: float) -> float:
+    """Highest loss rate, per second, at which the fleet still finishes.
+
+    A fleet shrinking at rate L delivers, per starting probe and summed
+    to the end of time, exp(-L x scattering time) / L seconds of work.
+    The survey needs survey_s per starting probe, so it finishes only if
+        L x exp(L x scattering time) x survey_s <= 1.
+    For a short scattering phase that is L below 1 / survey time."""
+    low, high = 0.0, 1.0 / survey_s
+    for _ in range(200):
+        mid = 0.5 * (low + high)
+        if mid * math.exp(mid * dispersal_s) * survey_s < 1.0:
+            low = mid
+        else:
+            high = mid
+    return low
 
 
 def _survey_time_for_fraction(sc: Scenario, dispersal_s: float,
@@ -1408,6 +1435,40 @@ def describe_kinematics(r: dict, canonical: bool = False) -> list:
     return fill(text)
 
 
+def describe_losses(r: dict, canonical: bool = False) -> list:
+    """Report lines on how many probes the survey can afford to lose."""
+    a = r["attrition"]
+    d = r["distance"]
+    path = (si_quantity(d["per_probe_m"], "meter") if canonical
+            else "%s light-years" % human_count(d["per_probe_m"]
+                                                / LIGHT_YEAR_M))
+    stops = human_count(r["visited_per_probe"]
+                        * (1.0 + r["duplication_fraction"]))
+    if not a["active"]:
+        text = ("No probe is assumed to be lost, over %s and %s stops per "
+                "probe." % (path, stops))
+    elif a["completed_fraction"] < 1.0:
+        text = ("At a loss rate of %s per year the fleet runs out with %s "
+                "of the survey done."
+                % (sig(a["rate_per_year"], 2),
+                   percent(a["completed_fraction"])))
+    else:
+        text = ("At a loss rate of %s per year %s of the fleet is still "
+                "working when the survey ends, after %s and %s stops per "
+                "probe." % (sig(a["rate_per_year"], 2),
+                            percent(a["fleet_left_at_end"]), path, stops))
+    text += (" The survey can finish only if the loss rate stays below %s "
+             "per year, that is, if a probe lasts longer than %s on "
+             "average. Above that rate the fleet runs out first: at twice "
+             "the rate with about half the survey done."
+             % (sig(a["threshold_per_year"], 2),
+                fmt_duration(a["mean_life_needed_years"], canonical)))
+    lines = fill(text)
+    lines += fill("Not modeled: records lost between deposits, and the "
+                  "travel needed to take over the work of a lost probe.")
+    return lines
+
+
 def describe_propellant(r: dict, canonical: bool = False) -> list:
     """Report lines on the propellant every stop needs."""
     sc = r["scenario"]
@@ -1577,6 +1638,11 @@ def render_report(r: dict, canonical: bool = False) -> str:
     d = r["distance"]
     add("  per probe:   %s" % fmt_meters(d["per_probe_m"], canonical))
     add("  fleet total: %s" % fmt_meters(d["fleet_m"], canonical))
+    add("")
+    add("Fleet losses")
+    add("-" * 60)
+    for line in describe_losses(r, canonical):
+        add(line)
     add("")
     add("Stops, starts and propellant")
     add("-" * 60)
@@ -1825,6 +1891,13 @@ def render_explain(r: dict) -> str:
            sc["envelope_factor"], ph["dispersal_years"]),
         "archive detours = deposits x 2 x detour distance / v = %.4g years"
         % ph["archive_detours_years"],
+        "",
+        "highest loss rate at which the fleet still finishes: the rate "
+        "L with",
+        "  L x exp(L x scattering) x (work + duplication + detours) = 1",
+        "  L = %.4g per year (a mean probe life of %.4g years)"
+        % (r["attrition"]["threshold_per_year"],
+           r["attrition"]["mean_life_needed_years"]),
         "",
         "TOTAL = scattering + work x (1 + duplication) + detours",
         "      = %.4g years" % r["total_years"],
