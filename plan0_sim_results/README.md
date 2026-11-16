@@ -19,8 +19,8 @@ go to systems that another probe has already surveyed, and how both
 depend on the rule, on what a probe knows, on where the probes start and
 on how many of them are lost.
 
-This document says what was simulated, gives the results of the full set
-of 237 runs, translates them into years and names what they do not show.
+This document says what was simulated, gives the results of the 321
+stored runs, translates them into years and names what they do not show.
 The runs themselves are stored beside it, in `results.jsonl`.
 
 ## The findings in brief
@@ -28,15 +28,16 @@ The runs themselves are stored beside it, in `results.jsonl`.
 1. **The survey is one percent of the mission.** Before any probe may
    begin, the fleet scatters across the disc for 978,000 years (Physical
    Layer section 4.5). After that, 99 percent of the systems are
-   surveyed within about 7,600 years and the last one after about
-   10,000. The cases below lie between 6,500 and 23,300 years, in a
-   mission of a million. The simulation decides how the survey should be
-   run, not how long the mission is.
+   surveyed within about 6,800 years and the last one after about 7,900.
+   The cases below lie between 6,500 and 23,300 years, in a mission of a
+   million. The simulation decides how the survey should be run, not how
+   long the mission is.
 2. **A probe can act on what it works out.** A probe that has worked out
    95 percent of the other probes' choices correctly, and never sees a
-   record, reaches 99 percent of the systems about 200 years later than
-   one that hears of every completion at the speed of light. One visit
-   in eight is wasted.
+   record, reaches 99 percent of the systems about 40 years later than
+   one that hears of every completion at the speed of light where the
+   probes start spread evenly, and about 200 years later where they
+   start at random. It wastes 4 percent of its visits, or 12 percent.
 3. **Provided each probe clears its own cell first.** A probe's cell is
    the set of systems nearer to its own starting point than to any other
    probe's. With nothing known of the others, probes that clear their
@@ -45,7 +46,9 @@ The runs themselves are stored beside it, in `results.jsonl`.
 4. **Where the probes start matters more than anything they know.**
    Spread evenly, one probe to a region of its own, probes that know
    nothing of each other reach 99 percent sooner than randomly placed
-   probes that hear of every completion at the speed of light.
+   probes that hear of every completion at the speed of light. The
+   specification starts them that way (Physical Layer section 4.5), and
+   the plan below is that start.
 5. **Working things out cannot reveal a lost probe.** Where a tenth of
    the fleet is gone and the others go on reckoning with it, one system
    in ten is never surveyed. Records do not have that weakness.
@@ -57,18 +60,21 @@ The runs themselves are stored beside it, in `results.jsonl`.
 Years from the start of the survey until 99 percent of the systems are
 surveyed:
 
-| Rule | What a probe knows of the others | Years |
-| --- | --- | --- |
-| roam from the start | nothing | 23,300 |
-| own cell only, random starting points | nothing needed | 11,700 |
-| own cell first | nothing | 10,700 |
-| own cell first | 95 percent worked out, no records (the plan) | 7,600 |
-| own cell first | completion records at light speed | 7,400 |
-| roam from the start | 95 percent worked out, no records | 7,300 |
-| own cell first | everything worked out in advance | 7,100 |
-| own cell only, starting points spread evenly | nothing needed | 7,000 |
-| roam from the start | completion records at light speed | 6,900 |
-| roam from the start | everything worked out in advance | 6,500 |
+| Rule | Starting points | What a probe knows of the others | Years |
+| --- | --- | --- | --- |
+| roam from the start | at random | nothing | 23,300 |
+| own cell only | at random | nothing needed | 11,700 |
+| own cell first | at random | nothing | 10,700 |
+| own cell first | at random | 95 percent worked out, no records | 7,600 |
+| own cell first | at random | completion records at light speed | 7,400 |
+| roam from the start | at random | 95 percent worked out, no records | 7,300 |
+| own cell first | at random | everything worked out in advance | 7,100 |
+| own cell first | spread evenly | nothing | 7,000 |
+| own cell only | spread evenly | nothing needed | 7,000 |
+| roam from the start | at random | completion records at light speed | 6,900 |
+| own cell first | spread evenly | 95 percent worked out, no records (the plan) | 6,800 |
+| own cell first | spread evenly | completion records at light speed | 6,800 |
+| roam from the start | at random | everything worked out in advance | 6,500 |
 
 The terms are explained below.
 
@@ -86,8 +92,8 @@ default:
 | Distance between neighboring systems | 1.6 parsecs at the median, 2.0 on average |
 | One hop from system to system | about 50 years |
 | Scattering before the survey | 978,000 years |
-| Survey after that | about 10,000 years |
-| What a star moves in 10,000 years, against its neighbors | 0.2 to 0.6 parsecs |
+| Survey after that | about 9,000 years |
+| What a star moves in 9,000 years, against its neighbors | 0.2 to 0.5 parsecs |
 
 The last line shapes the simulation. While the survey lasts a star moves
 a fraction of one hop: the stars stand still. A system that a probe
@@ -135,9 +141,10 @@ laws for that case, and this simulation does not apply to it.
   The probe then takes one of its eight nearest candidates by a key of
   its own, so that two probes that meet at one star part ways.
 - **Where the probes start.** At points drawn at random, which is the
-  base case; on a regular lattice, which gives every probe a cell of the
-  same size; or at the middles of regions of 1,000 systems, about ten
-  probes to each.
+  base case of results 1 to 5; on a regular lattice, which gives every
+  probe a cell of the same size, as the specification's one region per
+  probe does (result 6); or at the middles of regions of 1,000 systems,
+  about ten probes to each.
 - **Lost probes.** A share of the probes is missing from the start. A
   probe with foresight either knows which probes are missing, or goes on
   reckoning with them.
@@ -150,8 +157,8 @@ a hop; cells around random starting points are as uneven as geometry
 says, with a spread of 43 percent of the mean; the same seed gives the
 same result alone and inside a set.
 
-Every probe's clock must equal its travel plus its stays. In 235 of the
-237 stored runs it does, to ten decimal places. In the two runs with
+Every probe's clock must equal its travel plus its stays. In 319 of the
+321 stored runs it does, to ten decimal places. In the two runs with
 drifting stars it is off by up to 0.17 time units in 136 and 344, a
 tenth of a percent: there the stars are moved in steps of a fiftieth of
 a spacing, so a probe arrives at a star that is not quite where it
@@ -344,14 +351,113 @@ From 4,096 probes on, the 99 percent mark does not move. The last system
 of "own cell only" does not settle and cannot: it waits for the largest
 cell in the box, and among a billion cells the largest is larger still.
 
+### 6. Starting points spread evenly
+
+The specification seeds every probe in a region of its own (Physical
+Layer section 4.5). In the simulation that is a regular lattice: every
+probe has a cube of the same size to itself, and the systems fall into
+the cubes by chance, so the shares still differ by about a tenth. 4,096
+probes, two runs each, own cell first unless named. The lines for
+starting points at random come from boxes of that size too, and differ
+from result 1 in the last digit.
+
+| What a probe knows of the others | Starts | Half | 90% | 99% | 99.9% | Last system | Visits wasted | 99% in years |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| everything, worked out in advance | spread evenly | 0.48 | 0.94 | 1.10 | 1.20 | 1.62 | 0% | 6,800 |
+| everything, worked out in advance | at random | 0.49 | 0.96 | 1.16 | 1.40 | 1.69 | 0% | 7,200 |
+| completion records at light speed | spread evenly | 0.48 | 0.94 | 1.11 | 1.16 | 1.23 | 2% | 6,800 |
+| completion records at light speed | at random | 0.49 | 0.98 | 1.20 | 1.29 | 1.41 | 7% | 7,300 |
+| 95 percent worked out, no records | spread evenly | 0.48 | 0.94 | 1.11 | 1.18 | - | 4% | 6,800 |
+| 95 percent worked out, no records | at random | 0.49 | 0.99 | 1.23 | 1.36 | - | 12% | 7,600 |
+| 95 percent worked out, records 3 share times late | spread evenly | 0.48 | 0.94 | 1.11 | 1.18 | 1.29 | 6% | 6,800 |
+| 95 percent worked out, records 3 share times late | at random | 0.49 | 0.99 | 1.23 | 1.36 | 1.61 | 16% | 7,600 |
+| nothing | spread evenly | 0.48 | 0.94 | 1.14 | 1.24 | - | 18% | 7,000 |
+| nothing | at random | 0.50 | 1.13 | 1.73 | 2.31 | - | 63% | 10,600 |
+| nothing needed (own cell only) | spread evenly | 0.48 | 0.94 | 1.14 | 1.25 | 1.41 | 0% | 7,000 |
+| nothing needed (own cell only) | at random | 0.50 | 1.19 | 1.91 | 2.54 | 3.75 | 0% | 11,700 |
+
+**99 percent done, in share times**
+
+| Foresight | at once | 0.031 | 0.1 | 0.31 | 1 | 3.1 | 4.1 | never |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| none | 1.11 | 1.11 | 1.12 | 1.13 | 1.14 | 1.14 | 1.14 | 1.14 |
+| 80% | 1.10 | 1.10 | 1.11 | 1.11 | 1.13 | 1.13 | 1.13 | 1.13 |
+| 95% | 1.10 | 1.10 | 1.10 | 1.11 | 1.11 | 1.11 | 1.11 | 1.11 |
+| 99% | 1.10 | 1.10 | 1.10 | 1.10 | 1.10 | 1.10 | 1.10 | 1.10 |
+| all | 1.10 | · | · | · | · | · | · | · |
+
+**Last system, in share times**
+
+| Foresight | at once | 0.031 | 0.1 | 0.31 | 1 | 3.1 | 4.1 | never |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| none | 1.23 | 1.27 | 1.33 | 1.43 | 1.43 | 1.45 | 1.45 | - |
+| 80% | 1.26 | 1.26 | 1.26 | 1.30 | 1.33 | 1.34 | 1.34 | - |
+| 95% | 1.27 | 1.26 | 1.24 | 1.25 | 1.29 | 1.29 | 1.29 | - |
+| 99% | 1.35 | 1.32 | 1.29 | 1.25 | 1.26 | 1.25 | 1.25 | - |
+| all | 1.62 | · | · | · | · | · | · | · |
+
+**Visits wasted**
+
+| Foresight | at once | 0.031 | 0.1 | 0.31 | 1 | 3.1 | 4.1 | never |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| none | 2% | 4% | 7% | 14% | 23% | 25% | 25% | 18% |
+| 80% | 1% | 2% | 3% | 6% | 11% | 12% | 12% | 9% |
+| 95% | 1% | 1% | 2% | 3% | 6% | 6% | 6% | 4% |
+| 99% | 1% | 1% | 1% | 2% | 3% | 3% | 3% | 2% |
+| all | 0% | · | · | · | · | · | · | · |
+
+Other numbers of systems per probe and other lengths of stay, with
+completion records at light speed (1,728 probes for 300 systems per
+probe):
+
+| Change | Evenly spread: 99% / last / wasted | At random: 99% / last / wasted |
+| --- | --- | --- |
+| none: a hundred systems per probe | 1.11 / 1.23 / 2% | 1.20 / 1.41 / 7% |
+| 10 systems per probe | 1.33 / 1.68 / 16% | 1.51 / 1.95 / 24% |
+| 30 systems per probe | 1.19 / 1.38 / 7% | 1.32 / 1.58 / 13% |
+| 300 systems per probe | 1.06 / 1.14 / 1% | 1.11 / 1.22 / 3% |
+| stay a quarter as long | 1.12 / 1.27 / 2% | 1.22 / 1.45 / 6% |
+| stay twice as long | 1.09 / 1.20 / 3% | 1.18 / 1.36 / 7% |
+
+Lost probes. Each entry gives the 99 percent mark / the last system /
+the visits wasted:
+
+| Rule | What a probe knows | 10% lost, starts spread evenly | 10% lost, starts at random | 50% lost, spread evenly | 50% lost, at random |
+| --- | --- | --- | --- | --- | --- |
+| own cell first | records at light speed | 1.31 / 1.52 / 5% | 1.34 / 1.55 / 7% | 2.26 / 2.56 / 5% | 2.38 / 2.69 / 5% |
+| own cell first | 95 percent worked out, no records, losses known | 1.35 / - / 13% | 1.38 / - / 15% | 2.41 / - / 19% | 2.52 / - / 21% |
+| own cell first | everything worked out, losses not known | 10.3% never surveyed | 10.2% never surveyed | · | · |
+| own cell first | nothing | 2.98 / - / 87% | 3.07 / - / 87% | · | 7.76 / - / 90% |
+| own cell only | nothing needed | 10.3% never surveyed | 10.1% never surveyed | · | 51.3% never surveyed |
+
+- **Knowledge hardly matters any more.** Whatever a probe knows, 99
+  percent of the systems are done between 1.10 and 1.14 share times.
+  What knowledge still buys is the tail: the last system comes at 1.23
+  to 1.62 share times, and the visits wasted run from none to 25
+  percent.
+- **The plan wastes one visit in sixteen.** With 95 percent of the
+  others' choices worked out and records three to four share times late,
+  the 99 percent mark comes at 1.11 share times and the last system at
+  1.29, against 1.23 and 1.61 for starting points drawn at random.
+- **Lost probes undo part of the gain.** A lost probe leaves a hole in
+  the lattice. With a tenth of the fleet lost the 99 percent mark comes
+  at 1.31 share times with records, against 1.34 for random starts; with
+  none lost it was 1.11 against 1.20. Probes that know nothing then need
+  2.98 share times, almost as long as with random starts (3.07): an
+  even start spares them the search for work, and a lost neighbor
+  brings the search back. Probes that keep to their own region, or that
+  go on reckoning with the lost ones, still leave a tenth of the systems
+  unsurveyed.
+
 ## What it means in years
 
 Share times multiplied by 6,139 years, to the nearest hundred, counted
 from the moment the survey starts.
 
-| Case (own cell first unless named) | Half of the systems | 99 percent | 99.9 percent | Last system |
+| Case (own cell first and starts at random unless named) | Half of the systems | 99 percent | 99.9 percent | Last system |
 | --- | --- | --- | --- | --- |
-| the plan: 95 percent foresight, records too late to matter | 3,000 | 7,600 | 8,400 | 9,900 |
+| the plan: starts spread evenly, 95 percent foresight, records too late to matter | 3,000 | 6,800 | 7,300 | 7,900 |
+| the same with starts at random | 3,000 | 7,600 | 8,400 | 9,900 |
 | records at light speed, no foresight | 3,000 | 7,400 | 8,000 | 8,500 |
 | everything worked out in advance | 3,000 | 7,100 | 8,900 | 11,400 |
 | nothing known | 3,000 | 10,700 | 14,300 | - |
@@ -365,9 +471,10 @@ lasts about a million years whatever the probes know.
 
 ## How the results are used
 
-**In the calculator.** `plan0_pace.py` carries a table made from these
-runs (`STILL_FIELD`; the last command at the end of this document prints
-it). For six levels of completion, from half to the last system, the
+**In the calculator.** `plan0_pace.py` carries two tables made from
+these runs, one for each way of starting (`STILL_FIELD_EVEN` and
+`STILL_FIELD`; the last two commands at the end of this document print
+them). For six levels of completion, from half to the last system, a
 table holds the travel and the stays used up, for 10, 30, 100 and 300
 systems per probe, for foresight of 0, 80, 95, 99 and 100 percent, and
 for records from at once to never. The calculator reads it by
@@ -375,22 +482,23 @@ straight-line interpolation and gives it the weight of the share of
 stars that do not mix while the survey lasts: 98.7 percent for a billion
 probes, nil for ten thousand.
 
-By default the calculator takes probes that are right about 95 percent
-of the others' choices, clear their own cell first and start at points
-drawn at random. Under its default layout of archives a record reaches
-the next probe 3.8 share times after the event, which is after the
-survey has ended, so records play no part in it. The result:
+By default the calculator takes probes that start spread evenly, are
+right about 95 percent of the others' choices and clear their own cell
+first. Under its default layout of archives a record reaches the next
+probe 3.9 share times after the event, which is after the survey has
+ended, so records play no part in it. The result, and the same for
+starting points drawn at random (`--starts random`):
 
-| | Years after departure | Years after the survey starts |
-| --- | --- | --- |
-| Half of the systems | 981,500 | 3,000 |
-| 90 percent | 984,600 | 6,100 |
-| 99 percent | 986,100 | 7,700 |
-| Every system | 988,500 | 10,000 |
-| Records deposited: the end of the mission | 989,100 | 10,600 |
+| | Years after departure | Years after the survey starts | The same, starts at random |
+| --- | --- | --- | --- |
+| Half of the systems | 981,400 | 3,000 | 3,000 |
+| 90 percent | 984,300 | 5,800 | 6,100 |
+| 99 percent | 985,400 | 6,900 | 7,700 |
+| Every system | 986,500 | 8,000 | 10,000 |
+| Records deposited: the end of the mission | 987,200 | 8,700 | 10,600 |
 
-The calculator gives 7,700 years for the 99 percent mark where the table
-of the previous section gives 7,600. It counts travel and stays
+The calculator gives 6,900 years for the 99 percent mark where the table
+of the previous section gives 6,800. It counts travel and stays
 separately, at the mean spacing of the galaxy model, and keeps a weight
 of 1.3 percent for the laws of stars that mix.
 
@@ -405,9 +513,8 @@ of 1.3 percent for the laws of stars that mix.
   lapses if no record confirms it (Overview section 3.2; results 2 and
   4).
 - Every probe is seeded in a region of its own (Physical Layer section
-  4.5). That is the evenly spread start of result 3. The calculator's
-  default is the less favorable start at random points, which reaches
-  the 99 percent mark about 700 years later.
+  4.5). That is the evenly spread start of results 3 and 6, and the
+  calculator's default.
 
 ## Limits
 
@@ -421,6 +528,10 @@ of 1.3 percent for the laws of stars that mix.
   rest is never known unless a record comes. In a real fleet the doubt
   about another probe's choices would grow with time. The runs do not
   model that growth; they bracket it, from 80 to 100 percent.
+- Evenly spread starts are a regular lattice in the simulation: regions
+  of equal size, whose numbers of systems differ by a tenth by chance.
+  Regions drawn up from a catalogue to hold equal work would differ
+  less; lost probes make the layout uneven again (result 6).
 - The density of systems is the same throughout a box. In the galaxy it
   changes over hundreds of parsecs, and a probe's share is less than ten
   parsecs wide.
@@ -431,23 +542,30 @@ of 1.3 percent for the laws of stars that mix.
 
 ## The runs, and how to repeat them
 
-The stored set has 237 runs: boxes of 1,000 to 15,625 probes with
-100,000 to 1.6 million systems each, 104 million systems and 158 million
-arrivals in all. It was run on 15 November 2026 on a desktop computer
-with eight cores, four of them fast, and 8 gigabytes of memory. With six
-processes the set took 1.6 hours.
+There are 321 stored runs in two sets. The set `full` has 237 runs, for
+results 1 to 5: boxes of 1,000 to 15,625 probes with 100,000 to 1.6
+million systems each. The set `even` has 92 runs, for result 6, of which
+8 are also in the full set: boxes of 4,096 probes on a lattice, and of
+1,728 for 300 systems per probe. Together they follow 137 million
+systems and 199 million arrivals. They were run on 15 November 2026 on a
+desktop computer with eight cores, four of them fast, and 8 gigabytes of
+memory. The full set took 1.6 hours with six processes, the other 0.4
+hours with five.
 
-To repeat it, from the top of the repository:
+To repeat them, from the top of the repository:
 
 ```
 python plan0_sim.py --set full --estimate --processes 6
 python plan0_sim.py --set full --out plan0_sim_results --processes 6 --hours 4.5
+python plan0_sim.py --set even --out plan0_sim_results --processes 6 --hours 2
 python plan0_sim.py --report --out plan0_sim_results
 python plan0_sim.py --report --table --out plan0_sim_results
+python plan0_sim.py --report --table --start lattice --out plan0_sim_results
 ```
 
-The first command prints how long the set should take on the machine at
-hand, without running anything. The second runs it, stops after four and
-a half hours at the latest, and skips every run whose result is already
-in the folder. The third prints a table of the results, and the last
-prints the table that `plan0_pace.py` carries.
+The first command prints how long a set should take on the machine at
+hand, without running anything. The second and third run the sets, stop
+after the given hours at the latest, and skip every run whose result is
+already in the folder. The fourth prints a table of the results. The
+last two print the tables that `plan0_pace.py` carries, for starting
+points drawn at random and for probes spread evenly.
