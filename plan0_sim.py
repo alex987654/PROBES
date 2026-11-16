@@ -674,7 +674,7 @@ def matrix(name: str) -> list:
         add("size", (1,), probes=probes, rule="cells")
 
     # 5. records that arrive only after most of the work is done
-    for share in (0.0, 0.95):
+    for share in (0.0, 0.95, 0.8, 0.99):
         for late in (300.0, 400.0):
             add("late", side_seeds, probes=small, rule="cells-roam",
                 foresight=share, records=late)
@@ -980,10 +980,17 @@ def calibration(summary: dict) -> dict:
     knowledge.sort(key=lambda row: (row["foresight"],
                                     INF if row["late"] is None
                                     else row["late"]))
+    # for comparison: probes on a lattice that keep to their own cell
+    # and know nothing of the others, in share times
+    even = _pick(summary, rule="cells", seeding="lattice")
     return dict(levels=[float(level) for level in TABLE_LEVELS],
                 hop=None if plain is None else round(plain["hop"], 4),
                 travel=travel, stops=stops, per_probe=sizes,
-                knowledge=knowledge)
+                knowledge=knowledge,
+                even_starts=(None if even is None else [
+                    None if even["over_share_time"].get(level) is None
+                    else round(even["over_share_time"][level], 4)
+                    for level in TABLE_LEVELS]))
 
 
 # ---------------------------------------------------------------------------
@@ -1022,7 +1029,7 @@ what a probe knows of the others:
   also sends word of the system it sets out for.
 
 sets of runs (--set NAME):
-  full     every question the simulation was built for, about 220 runs
+  full     every question the simulation was built for, about 240 runs
   limited  the same questions with smaller boxes and fewer repeats
   trial    four small runs, to check that everything works
   Finished runs are written to results.jsonl in the folder given by

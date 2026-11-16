@@ -74,8 +74,8 @@ class TestOneRun(unittest.TestCase):
         # variance of 0.179 of the squared mean (a classic result); the
         # number of systems inside adds 1 / mean. For 100 systems per
         # probe the spread is the root of 0.189, 43 percent.
-        spreads = [run(probes=343, rule="cells", seed=seed)["load"]["spread"]
-                   for seed in (1, 2, 3)]
+        runs = [run(probes=343, rule="cells", seed=seed) for seed in (1, 2, 3)]
+        spreads = [r["load"]["spread"] for r in runs]
         self.assertAlmostEqual(sum(spreads) / 3, math.sqrt(0.179 + 0.01),
                                delta=0.03)
         # On a lattice every cell has the same volume and only the count
@@ -84,7 +84,7 @@ class TestOneRun(unittest.TestCase):
         self.assertAlmostEqual(even["load"]["spread"], 0.10, delta=0.02)
         # A probe that keeps to its cell wastes nothing and needs to know
         # nothing; the last system is done when the largest cell is.
-        r = run(probes=343, rule="cells")
+        r = runs[0]
         self.assertEqual(r["wasted_visits"], 0)
         self.assertGreater(r["end"],
                            0.9 * r["load"]["most"] * (r["mean_hop"] + 0.2))
