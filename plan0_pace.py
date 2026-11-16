@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Pace calculator for the PROBES CNL fleet's galaxy survey (PLAN-0).
 
-Estimates how long ten thousand autonomous probes would need to survey
-the star systems of this galaxy, given the communication and archive
+Estimates how long a fleet of autonomous probes (a billion by default)
+would need to survey the star systems of this galaxy, given the
+communication and archive
 architecture described in PROBES_CNL_Physical_Layer.md. Standard library
 only; run `python plan0_pace.py --help` for the full plain-language manual.
 
@@ -48,7 +49,8 @@ GALAXY_MODELS = ("exponential", "uniform")
 
 # Ways to run the survey. "regions" is the specification as it stands; the
 # others change how the fleet moves or what it records. The plan, and the
-# default, is "systems-midplane".
+# default, is "systems". ("systems-midplane" needs a survey of several
+# hundred million years and so a far smaller fleet.)
 STRATEGIES = {
     "regions": ("as the specification stands: the fleet spreads over the "
                 "disc and each probe surveys one region after another; "
@@ -251,7 +253,9 @@ class Scenario:
     command line or a scenario file; defaults cite the specification or
     standard galactic-astronomy values."""
 
-    probes: int = 10_000                 # Physical Layer section 1
+    # The plan: a billion probes, a hundred star systems each. Physical
+    # Layer section 1 names ten thousand.
+    probes: int = 1_000_000_000
     # Fraction of light speed. The plan asks for at least 0.1; Physical
     # Layer section 1 names 0.05 as nominal.
     speed_c: float = 0.1
@@ -303,7 +307,7 @@ class Scenario:
     bitrate_bps: float = 0.5             # optical link; section 2.2 (0.1-1)
     message_bytes: float = 500.0         # wire-form message; Wire Format s.9
     archives: str = "full-network"
-    strategy: str = "systems-midplane"   # see STRATEGIES
+    strategy: str = "systems"            # see STRATEGIES
     cache_spacing_kpc: Optional[float] = None   # overrides preset
     detour_kpc: Optional[float] = None          # overrides preset
     station_count: Optional[int] = None         # derives spacing + detour
@@ -385,7 +389,14 @@ def fleet_geometry(sc: Scenario) -> dict:
     """Spacing and timing of the fleet, computed from the scenario
     (the quantities of the regime table, Physical Layer section 1)."""
     area_kpc2 = math.pi * sc.disc_radius_kpc ** 2 / sc.probes
-    spacing_kpc = math.sqrt(area_kpc2)          # one probe per square cell
+    layer_kpc = math.sqrt(area_kpc2)            # one probe per square cell
+    # That table lays the fleet out in one layer. Probes that would then
+    # lie closer together than the disc is thick do not fit in one layer:
+    # they fill the disc, several above one another, each in the middle
+    # of a cube of its own.
+    stacked = layer_kpc < sc.disc_thickness_kpc
+    spacing_kpc = ((area_kpc2 * sc.disc_thickness_kpc) ** (1.0 / 3.0)
+                   if stacked else layer_kpc)
     # Same area per probe on a lattice where each probe has six neighbors.
     lattice_kpc = math.sqrt(2.0 * area_kpc2 / math.sqrt(3.0))
     light_years = spacing_kpc * KPC_M / C_M_PER_S / YEAR_S
@@ -399,6 +410,10 @@ def fleet_geometry(sc: Scenario) -> dict:
     return dict(
         area_per_probe_kpc2=area_kpc2,
         spacing_kpc=spacing_kpc,
+        # the same counted in one layer, as the regime table does
+        layer_spacing_kpc=layer_kpc,
+        stacked=stacked,
+        layers=sc.disc_thickness_kpc / spacing_kpc if stacked else 1.0,
         lattice_spacing_kpc=lattice_kpc,
         light_years_per_spacing=light_years,
         transit_years_per_spacing=transit_years,
@@ -463,7 +478,8 @@ def resolve_layout(sc: Scenario) -> dict:
 
 INPUT_TABLE = [
     ("probes", None, None, None, False,
-     "the plan (Physical Layer section 1)"),
+     "the plan: a billion probes, a hundred systems each. Physical Layer "
+     "section 1 names ten thousand: --probes 10000"),
     ("speed_c", 0.1, 0.2, "log", True,
      "the plan: at least 0.1 of light speed, up to the fastest of the "
      "studied probe concepts (Physical Layer section 5). Physical Layer "
@@ -526,9 +542,9 @@ INPUT_TABLE = [
     ("archives", None, None, None, False,
      "the doctrine layout (Physical Layer section 3)"),
     ("strategy", None, None, None, False,
-     "the plan: completion recorded by system, probes waiting at the "
-     "mid-plane of the disc. The specification as it stands records "
-     "completion by region (README section 3.2): --strategy regions"),
+     "the plan: completion recorded by system. The specification as it "
+     "stands records completion by region (README section 3.2): "
+     "--strategy regions"),
     ("cache_spacing_kpc", None, None, None, False,
      "set by the archive layout"),
     ("detour_kpc", None, None, None, False,
@@ -2184,6 +2200,8 @@ def fmt_number_span(low: float, high: float) -> str:
 def fmt_kiloparsecs(kpc: float, canonical: bool = False) -> str:
     if canonical:
         return si_quantity(kpc * KPC_M, "meter")
+    if 0.0 < kpc < 0.1:
+        return "%.3g parsecs" % (1000.0 * kpc)
     return "%.3g kiloparsecs" % kpc
 
 
@@ -3002,8 +3020,18 @@ def render_report(r: dict, canonical: bool = False) -> str:
     add("-" * 60)
     add("  mean probe spacing:        %s"
         % fmt_kiloparsecs(g["spacing_kpc"], canonical))
-    add("                             (%s on a lattice with six neighbors)"
-        % fmt_kiloparsecs(g["lattice_spacing_kpc"], canonical))
+    if g["stacked"]:
+        for line in fill(
+                "(the probes fill the disc, %s deep; laid out in one layer, "
+                "as that section counts, they would lie %s apart)"
+                % (sig(g["layers"], 2),
+                   fmt_kiloparsecs(g["layer_spacing_kpc"], canonical)),
+                indent=" " * 29):
+            add(line)
+    else:
+        add("                             (%s on a lattice with six "
+            "neighbors)"
+            % fmt_kiloparsecs(g["lattice_spacing_kpc"], canonical))
     add("  light time per spacing:    %s"
         % fmt_duration(g["light_years_per_spacing"], canonical, 3))
     add("  probe transit per spacing: %s"
@@ -3354,8 +3382,9 @@ def json_safe(value):
 # ---------------------------------------------------------------------------
 
 _DESCRIPTION = """\
-Estimate how long a fleet of ten thousand autonomous space probes would
-need to survey the star systems of our galaxy, following the fleet plan
+Estimate how long a fleet of autonomous space probes, a billion by
+default, would need to survey the star systems of our galaxy, following
+the fleet plan
 and physical communication rules written in the Markdown documents of
 this repository.
 
@@ -3446,7 +3475,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     g = p.add_argument_group("fleet and survey assumptions")
     g.add_argument("--probes", type=int, metavar="COUNT",
-                   help="number of probes in the fleet (default 10000)")
+                   help="number of probes in the fleet (default "
+                        "1000000000, one billion)")
     g.add_argument("--speed", type=float, metavar="FRACTION", dest="speed_c",
                    help="cruise speed as a fraction of the speed of light "
                         "(default 0.1; studied concepts span 0.05 to 0.2)")
@@ -3551,7 +3581,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     g.add_argument("--strategy", choices=list(STRATEGIES), metavar="NAME",
                    help="way of running the survey; see the list below "
-                        "(default systems-midplane; regions is the "
+                        "(default systems; regions is the "
                         "specification as it stands)")
 
     g = p.add_argument_group("archives and communication")

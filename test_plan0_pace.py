@@ -22,11 +22,22 @@ DENYLIST_WORDS = ["CNL", "FEC", "PPM", "GSF", "PTS", "CCSDS", "YAML",
 DENYLIST_SUBSTRINGS = ["T_c", "h_max", "PROC-", "CAT-", "CCH-", "e.g."]
 
 
+def ten_thousand(**inputs):
+    """The fleet of Physical Layer section 1: ten thousand probes, here
+    with the rule of waiting at the mid-plane, which suits a survey of
+    hundreds of millions of years. The laws for stars that mix while the
+    survey lasts were worked out for this fleet and stay pinned on it,
+    whatever the defaults of the calculator become."""
+    inputs.setdefault("probes", 10_000)
+    inputs.setdefault("strategy", "systems-midplane")
+    return pp.Scenario(**inputs)
+
+
 def by_region(**inputs):
-    """A scenario as the specification stands, completion recorded by
+    """That fleet as the specification stands, completion recorded by
     region. The identities of the travel model are pinned on it: a hop of
     one length, work in step with the systems visited."""
-    return pp.Scenario(strategy="regions", **inputs)
+    return ten_thousand(strategy="regions", **inputs)
 
 
 def banned_tokens(text):
@@ -72,25 +83,37 @@ class TestModel(unittest.TestCase):
     def test_default_headline_in_sane_range(self):
         # A coarse tripwire only; the identities are pinned elsewhere.
         # The band moves whenever a default moves, on purpose. It is now
-        # centered on 0.75 billion years: 1e11 systems in an exponential
-        # disc with a bulge, completion recorded by system, at 0.1 of
-        # light speed. The cruise speed is what moved it, from 0.05: the
-        # plan asks for at least 0.1. Twice the speed is not half the
-        # time (1.40 billion years before), because the stay of 10 years
-        # per system does not shrink: 74 years per system against 138.
+        # centered on one million years, where it was 0.75 billion: the
+        # plan is a fleet of a billion probes, not ten thousand. Each
+        # probe then has a hundred systems, which take it about 6,000
+        # years, and nearly all of the time is the scattering phase before
+        # the survey starts: 30 kiloparsecs at 0.1 of light speed, 978,000
+        # years, which no probe may cut short without showing where the
+        # fleet set out from.
         r = pp.derive(pp.Scenario())
-        self.assertEqual(r["strategy"], "systems-midplane")
+        self.assertEqual(r["scenario"]["probes"], 10 ** 9)
+        self.assertEqual(r["strategy"], "systems")
         self.assertEqual(r["scenario"]["speed_c"], 0.1)
-        self.assertGreater(r["total_years"], 0.65e9)
-        self.assertLess(r["total_years"], 0.85e9)
-        # The specification as it stands: one pass by regions.
-        by_region = pp.derive(pp.Scenario(strategy="regions"))
+        self.assertEqual(r["visited_per_probe"], 100.0)
+        self.assertGreater(r["total_years"], 0.95e6)
+        self.assertLess(r["total_years"], 1.05e6)
+        self.assertAlmostEqual(r["phases"]["dispersal_years"] / 9.785e5, 1.0,
+                               places=3)
+        self.assertGreater(r["phases"]["dispersal_years"]
+                           / r["total_years"], 0.95)
+        # The fleet of Physical Layer section 1, ten thousand probes: 0.75
+        # billion years at the same speed, 1.40 at the 0.05 named there.
+        old = pp.derive(ten_thousand())
+        self.assertEqual(old["strategy"], "systems-midplane")
+        self.assertAlmostEqual(old["total_years"] / 0.752e9, 1.0, delta=0.005)
+        slow = pp.derive(ten_thousand(speed_c=0.05))
+        self.assertAlmostEqual(slow["total_years"] / 1.404e9, 1.0,
+                               delta=0.005)
+        # The specification as it stands, for that fleet: one pass by
+        # regions.
+        by_region = pp.derive(ten_thousand(strategy="regions"))
         self.assertGreater(by_region["total_years"], 0.5e9)
         self.assertLess(by_region["total_years"], 0.75e9)
-        # At the nominal speed of Physical Layer section 1.
-        slow = pp.derive(pp.Scenario(speed_c=0.05))
-        self.assertAlmostEqual(slow["total_years"] / 1.401e9, 1.0,
-                               delta=0.005)
 
     def test_regime_table_cross_checks(self):
         # Physical Layer section 1: 0.27 kiloparsecs at 0.05 c takes about
@@ -101,47 +124,47 @@ class TestModel(unittest.TestCase):
         self.assertAlmostEqual(500 * 8 / 1.0 / 3600, 1.11, delta=0.01)
 
     def test_phases_sum_to_total(self):
-        r = pp.derive(pp.Scenario())
+        r = pp.derive(ten_thousand())
         ph = r["phases"]
         self.assertAlmostEqual(
             sum(ph.values()) / r["total_years"], 1.0, places=6)
 
     def test_faster_probes_finish_sooner(self):
-        slow = pp.derive(pp.Scenario(speed_c=0.05))["total_years"]
-        fast = pp.derive(pp.Scenario(speed_c=0.1))["total_years"]
+        slow = pp.derive(ten_thousand(speed_c=0.05))["total_years"]
+        fast = pp.derive(ten_thousand(speed_c=0.1))["total_years"]
         self.assertLess(fast, slow)
 
     def test_shallower_depth_is_faster(self):
-        full = pp.derive(pp.Scenario(depth=1.0))["total_years"]
-        tenth = pp.derive(pp.Scenario(depth=0.1))["total_years"]
+        full = pp.derive(ten_thousand(depth=1.0))["total_years"]
+        tenth = pp.derive(ten_thousand(depth=0.1))["total_years"]
         self.assertLess(tenth, full)
         # Sampling thins the visited set, so the gain is less than tenfold.
         self.assertGreater(tenth, full / 10.0)
 
     def test_no_archives_hits_duplication_cap(self):
-        sc = pp.Scenario(archives="none")
+        sc = ten_thousand(archives="none")
         r = pp.derive(sc)
         self.assertTrue(r["staleness_infinite"])
         self.assertAlmostEqual(r["duplication_fraction"], sc.dup_cap)
         self.assertEqual(r["comms"]["messages_per_probe"], 0.0)
 
     def test_archives_never_worse_than_none(self):
-        worst = pp.derive(pp.Scenario(archives="none"))
+        worst = pp.derive(ten_thousand(archives="none"))
         for name in pp.ARCHIVE_PRESETS:
-            r = pp.derive(pp.Scenario(archives=name))
+            r = pp.derive(ten_thousand(archives=name))
             self.assertLessEqual(r["duplication_fraction"],
                                  worst["duplication_fraction"], name)
 
     def test_all_presets_run(self):
         for name in pp.ARCHIVE_PRESETS:
-            r = pp.derive(pp.Scenario(archives=name))
+            r = pp.derive(ten_thousand(archives=name))
             self.assertGreater(r["total_years"], 0, name)
 
     def test_region_never_exceeds_one_probes_share(self):
         # Audit A7: with a billion probes each share is 200 systems, but
         # the region cycle stayed at 1000 systems, five times the whole
         # survey of that probe.
-        sc = pp.Scenario(probes=1_000_000_000)
+        sc = ten_thousand(probes=1_000_000_000)
         r = pp.derive(sc)
         self.assertTrue(r["region_shrunk"])
         self.assertAlmostEqual(r["region_systems"], r["visited_per_probe"])
@@ -153,37 +176,37 @@ class TestModel(unittest.TestCase):
         # before a share drops below one region.
         self.assertTrue(r["duplication_capped"])
         self.assertTrue(
-            pp.derive(pp.Scenario(probes=50_000_000))["duplication_capped"])
+            pp.derive(ten_thousand(probes=50_000_000))["duplication_capped"])
         self.assertFalse(
-            pp.derive(pp.Scenario(probes=50_000_000))["region_shrunk"])
+            pp.derive(ten_thousand(probes=50_000_000))["region_shrunk"])
         self.assertFalse(
-            pp.derive(pp.Scenario(archives="none"))["duplication_capped"])
+            pp.derive(ten_thousand(archives="none"))["duplication_capped"])
         # An ordinary fleet is untouched.
-        r = pp.derive(pp.Scenario())
+        r = pp.derive(ten_thousand())
         self.assertFalse(r["region_shrunk"])
         self.assertFalse(r["duplication_capped"])
-        self.assertEqual(r["region_systems"], pp.Scenario().region_systems)
+        self.assertEqual(r["region_systems"], ten_thousand().region_systems)
         self.assertAlmostEqual(
             r["regions_per_probe"] * r["region_systems"],
             r["visited_per_probe"])
 
     def test_milestones_monotonic(self):
-        r = pp.derive(pp.Scenario())
+        r = pp.derive(ten_thousand())
         years = [m["years"] for m in r["milestones"]]
         self.assertEqual(years, sorted(years))
         self.assertAlmostEqual(years[-1], r["total_years"], places=6)
 
     def test_attrition_stretches_or_truncates(self):
-        base = pp.derive(pp.Scenario())["total_years"]
-        mild = pp.derive(pp.Scenario(attrition_per_year=1e-11))
+        base = pp.derive(ten_thousand())["total_years"]
+        mild = pp.derive(ten_thousand(attrition_per_year=1e-11))
         self.assertGreater(mild["total_years"], base)
         self.assertEqual(mild["attrition"]["completed_fraction"], 1.0)
-        harsh = pp.derive(pp.Scenario(attrition_per_year=1e-3))
+        harsh = pp.derive(ten_thousand(attrition_per_year=1e-3))
         self.assertLess(harsh["attrition"]["completed_fraction"], 1.0)
         self.assertTrue(math.isinf(harsh["total_years"]))
 
     def test_scenario_round_trip_through_dict(self):
-        sc = pp.Scenario(speed_c=0.1, archives="sparse")
+        sc = ten_thousand(speed_c=0.1, archives="sparse")
         clone = pp.Scenario.from_dict(
             json.loads(json.dumps(pp.asdict(sc))))
         self.assertEqual(pp.derive(sc)["total_years"],
@@ -197,7 +220,7 @@ class TestModel(unittest.TestCase):
         for bad in [dict(depth=0), dict(depth=1.5), dict(speed_c=1.0),
                     dict(probes=0), dict(archives="orbital-mind-lasers")]:
             with self.assertRaises(ValueError):
-                pp.derive(pp.Scenario(**bad))
+                pp.derive(ten_thousand(**bad))
 
 
 def parse(argv):
@@ -220,7 +243,7 @@ class TestIdentities(unittest.TestCase):
                    strategy="regions", speed_c=0.05)
 
     def test_headline_from_first_principles(self):
-        sc = pp.Scenario(**self.AUDITED)
+        sc = ten_thousand(**self.AUDITED)
         r = pp.derive(sc)
         year = 365.25 * 86_400.0
         light_year = 299_792_458.0 * year
@@ -252,7 +275,7 @@ class TestIdentities(unittest.TestCase):
         for name in pp.ARCHIVE_PRESETS:
             for kwargs in [dict(), dict(speed_c=0.2, depth=0.3),
                            dict(probes=37, systems=5e9)]:
-                r = pp.derive(pp.Scenario(archives=name, **kwargs))
+                r = pp.derive(ten_thousand(archives=name, **kwargs))
                 self.assertAlmostEqual(
                     sum(r["phases"].values()) / r["total_years"], 1.0,
                     places=12, msg=(name, kwargs))
@@ -292,7 +315,7 @@ class TestIdentities(unittest.TestCase):
         # At the reference distance of the link budget the rate is the
         # one given.
         reference_kpc = pp.LINK_REFERENCE_M / pp.KPC_M
-        sc = pp.Scenario(bitrate_bps=0.25, message_bytes=800.0,
+        sc = ten_thousand(bitrate_bps=0.25, message_bytes=800.0,
                          cache_spacing_kpc=reference_kpc)
         c = pp.derive(sc)["comms"]
         self.assertSame(c["link_rate_bps"], 0.25)
@@ -304,24 +327,24 @@ class TestIdentities(unittest.TestCase):
         # Audit C9: the sparse layout kept the full rate over 5
         # kiloparsecs.
         reference_kpc = pp.LINK_REFERENCE_M / pp.KPC_M
-        near = pp.derive(pp.Scenario(cache_spacing_kpc=reference_kpc))
-        far = pp.derive(pp.Scenario(cache_spacing_kpc=3 * reference_kpc))
+        near = pp.derive(ten_thousand(cache_spacing_kpc=reference_kpc))
+        far = pp.derive(ten_thousand(cache_spacing_kpc=3 * reference_kpc))
         self.assertSame(far["comms"]["link_rate_bps"] * 9,
                         near["comms"]["link_rate_bps"])
         self.assertSame(far["comms"]["link_seconds_per_message"],
                         9 * near["comms"]["link_seconds_per_message"])
-        sparse = pp.derive(pp.Scenario(archives="sparse"))["comms"]
+        sparse = pp.derive(ten_thousand(archives="sparse"))["comms"]
         self.assertSame(sparse["link_rate_bps"],
                         0.5 * (8.0e18 / (5.0 * pp.KPC_M)) ** 2)
         self.assertLess(sparse["link_rate_bps"], 0.002)
         self.assertIn("days at", pp.render_report(
-            pp.derive(pp.Scenario(archives="sparse"))))
-        none = pp.derive(pp.Scenario(archives="none"))
+            pp.derive(ten_thousand(archives="sparse"))))
+        none = pp.derive(ten_thousand(archives="none"))
         self.assertIsNone(none["comms"]["link_distance_m"])
         self.assertIn("no messages are sent", pp.render_report(none))
         # Unattended boxes cannot beam: records are handed over at the
         # box, so the budget rate applies whatever the box spacing.
-        boxes = pp.derive(pp.Scenario(archives="route-boxes-only",
+        boxes = pp.derive(ten_thousand(archives="route-boxes-only",
                                       cache_spacing_kpc=40.0))
         self.assertIsNone(boxes["comms"]["link_distance_m"])
         self.assertEqual(boxes["comms"]["link_rate_bps"], 0.5)
@@ -356,11 +379,11 @@ class TestIdentities(unittest.TestCase):
                                        1.0, places=9, msg=(rate, m))
 
     def test_exhausted_fleet_fraction_matches_numerical_integration(self):
-        base = pp.derive(pp.Scenario())
+        base = pp.derive(ten_thousand())
         needed = base["total_years"] - base["phases"]["dispersal_years"]
         dispersal = base["phases"]["dispersal_years"]
         for rate in (2e-9, 1e-8):
-            r = pp.derive(pp.Scenario(attrition_per_year=rate))
+            r = pp.derive(ten_thousand(attrition_per_year=rate))
             self.assertTrue(r["fleet_exhausted"])
             # Everything the fleet will ever do: integrate far past the
             # point where no probe is left.
@@ -376,10 +399,10 @@ class TestIdentities(unittest.TestCase):
 
     def test_loss_rate_threshold_is_one_over_the_survey_time(self):
         # Completion needs loss rate x survey time below about one.
-        base = pp.derive(pp.Scenario())
+        base = pp.derive(ten_thousand())
         survey = base["total_years"] - base["phases"]["dispersal_years"]
-        just_below = pp.derive(pp.Scenario(attrition_per_year=0.99 / survey))
-        just_above = pp.derive(pp.Scenario(attrition_per_year=1.01 / survey))
+        just_below = pp.derive(ten_thousand(attrition_per_year=0.99 / survey))
+        just_above = pp.derive(ten_thousand(attrition_per_year=1.01 / survey))
         self.assertFalse(just_below["fleet_exhausted"])
         self.assertTrue(just_above["fleet_exhausted"])
 
@@ -417,7 +440,7 @@ class TestUncertainty(unittest.TestCase):
     def test_headline_has_two_significant_figures(self):
         for kwargs in [dict(), dict(speed_c=0.2), dict(systems=3.33e9),
                        dict(dwell_years=777.0), dict(probes=123)]:
-            r = pp.derive(pp.Scenario(**kwargs))
+            r = pp.derive(ten_thousand(**kwargs))
             block = self.headline_block(pp.render_report(r))
             match = re.search(r"about ([0-9.]+) (\w+ )?years \(([0-9.]+) ",
                               block)
@@ -448,7 +471,7 @@ class TestUncertainty(unittest.TestCase):
         self.assertNotIn("Input ranges, and", out)
 
     def test_same_seed_repeats_and_other_seeds_agree(self):
-        sc = pp.Scenario()
+        sc = ten_thousand()
         ranges = pp.builtin_ranges()
         first = pp.run_uncertainty(sc, ranges, draws=1500, seed=5)
         again = pp.run_uncertainty(sc, ranges, draws=1500, seed=5)
@@ -468,7 +491,7 @@ class TestUncertainty(unittest.TestCase):
             pp.run_uncertainty(sc, shuffled, draws=1500, seed=5), first)
 
     def test_interval_brackets_the_median_and_one_at_a_time_rows(self):
-        sc = pp.Scenario()
+        sc = ten_thousand()
         u = pp.run_uncertainty(sc, pp.builtin_ranges(), draws=1000)
         pct = u["percentiles_years"]
         self.assertLess(pct["5"], pct["50"])
@@ -504,7 +527,7 @@ class TestUncertainty(unittest.TestCase):
     def test_audited_scenario_reproduces_the_audit_spread(self):
         # Audit D, on the inputs it was run against: 5th percentile 0.64,
         # median 2.3, 95th percentile 16.7 billion years, a factor of 26.
-        sc = pp.Scenario(**TestIdentities.AUDITED)
+        sc = ten_thousand(**TestIdentities.AUDITED)
         ranges = pp.normalize_ranges({
             "systems": {"low": 1e11, "high": 4e11, "scale": "log"},
             "stellar_density": [0.07, 0.14],
@@ -569,13 +592,13 @@ class TestUncertainty(unittest.TestCase):
                 pp.normalize_ranges(bad)
         # An end of a range that the model itself cannot use.
         with self.assertRaises(ValueError) as caught:
-            pp.run_uncertainty(pp.Scenario(), pp.normalize_ranges(
+            pp.run_uncertainty(ten_thousand(), pp.normalize_ranges(
                 {"speed_c": {"low": 0.5, "high": 2.0, "scale": "linear"}}))
         self.assertIn("speed_c", str(caught.exception))
         with self.assertRaises(ValueError):
-            pp.run_uncertainty(pp.Scenario(), {})
+            pp.run_uncertainty(ten_thousand(), {})
         with self.assertRaises(ValueError):
-            pp.run_uncertainty(pp.Scenario(), pp.builtin_ranges(), draws=0)
+            pp.run_uncertainty(ten_thousand(), pp.builtin_ranges(), draws=0)
 
     def test_draws_and_seed_alone_are_refused(self):
         for argv in (["--draws", "50"], ["--seed", "3"]):
@@ -588,7 +611,7 @@ class TestUncertainty(unittest.TestCase):
         self.assertIn("draws", err)
 
     def test_losses_inside_a_range_are_counted_and_written_strictly(self):
-        sc = pp.Scenario()
+        sc = ten_thousand()
         ranges = pp.normalize_ranges(
             {"attrition_per_year": {"low": 1e-11, "high": 1e-8,
                                     "scale": "log"}})
@@ -606,7 +629,7 @@ class TestUncertainty(unittest.TestCase):
         self.assertIn("fleet is exhausted before the end in", report)
 
     def test_set_value_outside_its_range_is_pointed_out(self):
-        sc = pp.Scenario(dwell_years=5000.0)
+        sc = ten_thousand(dwell_years=5000.0)
         result = pp.derive(sc)
         result["uncertainty"] = pp.run_uncertainty(
             sc, pp.builtin_ranges(), draws=100)
@@ -629,7 +652,7 @@ class TestDefaultsTable(unittest.TestCase):
             self.assertIn(scale, pp.RANGE_SCALES, name)
 
     def test_every_default_lies_inside_its_range(self):
-        default = pp.Scenario()
+        default = ten_thousand()
         for name, low, high, _, _, _ in pp.INPUT_TABLE:
             value = getattr(default, name)
             if name == "systems":
@@ -645,7 +668,7 @@ class TestDefaultsTable(unittest.TestCase):
         self.assertEqual(pp.normalize_ranges(ranges), ranges)
 
     def test_explain_prints_the_table(self):
-        text = pp.render_explain(pp.derive(pp.Scenario()))
+        text = pp.render_explain(pp.derive(ten_thousand()))
         self.assertIn("DEFAULTS, THEIR SOURCES AND PLAUSIBLE RANGES", text)
         table = " ".join(text[text.index("DEFAULTS, THEIR SOURCES"):].split())
         for action in pp.build_parser()._actions:
@@ -714,6 +737,10 @@ class TestOneSourceOfTruth(unittest.TestCase):
         for kwargs, argv in cases:
             self.assertEqual(pp.derive(parse(argv)),
                              pp.derive(pp.Scenario(**kwargs)), argv)
+            self.assertEqual(
+                pp.derive(parse(argv + ["--probes", "10000", "--strategy",
+                                        "systems-midplane"])),
+                pp.derive(ten_thousand(**kwargs)), argv)
 
     def test_density_alone_means_uniform_disc_with_derived_count(self):
         sc = by_region(stellar_density=0.1, disc_radius_kpc=15.0,
@@ -729,7 +756,7 @@ class TestOneSourceOfTruth(unittest.TestCase):
                                r["systems"])
 
     def test_count_alone_in_uniform_disc_gives_the_density(self):
-        r = pp.derive(pp.Scenario(galaxy_model="uniform"))
+        r = pp.derive(ten_thousand(galaxy_model="uniform"))
         gal = r["galaxy"]
         self.assertEqual(gal["source"], "count")
         self.assertAlmostEqual(
@@ -737,12 +764,12 @@ class TestOneSourceOfTruth(unittest.TestCase):
             / pp.DEFAULT_SYSTEMS, 1.0)
         # Feeding the derived density back in lands on the same count
         # and the same answer: there is no second source of truth.
-        again = pp.derive(pp.Scenario(stellar_density=gal["uniform_density"]))
+        again = pp.derive(ten_thousand(stellar_density=gal["uniform_density"]))
         self.assertAlmostEqual(again["systems"] / r["systems"], 1.0)
         self.assertAlmostEqual(again["total_years"] / r["total_years"], 1.0)
 
     def test_count_and_density_both_given_are_kept_and_flagged(self):
-        r = pp.derive(pp.Scenario(systems=2e11, stellar_density=0.1))
+        r = pp.derive(ten_thousand(systems=2e11, stellar_density=0.1))
         self.assertEqual(r["galaxy"]["source"], "count and density")
         self.assertEqual(r["systems"], 2e11)
         self.assertAlmostEqual(r["galaxy"]["mean_spacing_pc"],
@@ -750,7 +777,7 @@ class TestOneSourceOfTruth(unittest.TestCase):
         self.assertIn("do not describe the same disc", pp.render_report(r))
 
     def test_shape_inputs_are_reported_unused_in_a_uniform_disc(self):
-        r = pp.derive(pp.Scenario(stellar_density=0.1, scale_length_kpc=3.0,
+        r = pp.derive(ten_thousand(stellar_density=0.1, scale_length_kpc=3.0,
                                   bulge_fraction=0.3))
         self.assertEqual({item["input"] for item in r["unused_inputs"]},
                          {"scale_length_kpc", "bulge_fraction"})
@@ -786,7 +813,7 @@ class TestGalaxyModel(unittest.TestCase):
                                     disc_thickness_kpc=1.1,
                                     bulge_fraction=0.3, bulge_radius_kpc=2.0),
                        dict(disc_radius_kpc=6.0)]:
-            gal = pp.derive(pp.Scenario(**kwargs))["galaxy"]
+            gal = pp.derive(ten_thousand(**kwargs))["galaxy"]
             total = self.disc_integral(gal, 1.0) + self.bulge_integral(gal,
                                                                        1.0)
             # places=4 leaves room for the error of the sum itself.
@@ -843,7 +870,7 @@ class TestGalaxyModel(unittest.TestCase):
     def test_percentile_inverts_the_distribution(self):
         for kwargs in [dict(), dict(bulge_fraction=0.0),
                        dict(galaxy_model="uniform")]:
-            gal = pp.derive(pp.Scenario(**kwargs))["galaxy"]
+            gal = pp.derive(ten_thousand(**kwargs))["galaxy"]
             self.assertEqual(pp.spacing_cdf(gal, 1e-9), 0.0)
             self.assertAlmostEqual(pp.spacing_cdf(gal, 1e9), 1.0)
             if gal["model"] == "uniform":
@@ -856,7 +883,7 @@ class TestGalaxyModel(unittest.TestCase):
                                        places=9)
 
     def test_disc_density_falls_with_the_scale_length(self):
-        gal = pp.derive(pp.Scenario(bulge_fraction=0.0))["galaxy"]
+        gal = pp.derive(ten_thousand(bulge_fraction=0.0))["galaxy"]
         self.assertEqual(len(gal["parts"]), 1)
         inner = pp.midplane_density(gal, 2_000.0)
         outer = pp.midplane_density(gal, 14_000.0)
@@ -891,13 +918,13 @@ class TestGalaxyModel(unittest.TestCase):
             left[best] = left[-1]
             left.pop()
         mean_step = total / (count - 1) / count ** (-1.0 / 3.0)
-        self.assertAlmostEqual(mean_step, pp.Scenario().path_factor,
+        self.assertAlmostEqual(mean_step, ten_thousand().path_factor,
                                delta=0.03)
         # It sits between the shortest possible route and one mean
         # spacing per hop, the ends of its plausible range.
         row = next(row for row in pp.INPUT_TABLE if row[0] == "path_factor")
         self.assertEqual((row[1], row[2]), (0.70, 1.0))
-        self.assertLess(0.6979, pp.Scenario().path_factor)
+        self.assertLess(0.6979, ten_thousand().path_factor)
 
     def test_hop_identities(self):
         sc = by_region(path_factor=0.9)
@@ -920,12 +947,12 @@ class TestGalaxyModel(unittest.TestCase):
 
     def test_unknown_galaxy_model_rejected(self):
         with self.assertRaises(ValueError):
-            pp.derive(pp.Scenario(galaxy_model="spiral"))
+            pp.derive(ten_thousand(galaxy_model="spiral"))
         for bad in [dict(bulge_fraction=1.0), dict(bulge_fraction=-0.1),
                     dict(scale_length_kpc=0), dict(bulge_radius_kpc=0),
                     dict(systems=0), dict(stellar_density=-1)]:
             with self.assertRaises(ValueError, msg=bad):
-                pp.derive(pp.Scenario(**bad))
+                pp.derive(ten_thousand(**bad))
 
 
 class TestFleetGeometry(unittest.TestCase):
@@ -935,24 +962,59 @@ class TestFleetGeometry(unittest.TestCase):
         # Physical Layer section 1: about 0.07 square kiloparsecs per
         # probe, 0.27 kiloparsecs spacing, 880 years of light time,
         # 1.8e4 years of probe transit at its nominal 0.05 of light
-        # speed, 1e5 years to cross the fleet.
-        g = pp.derive(pp.Scenario(speed_c=0.05))["geometry"]
+        # speed, 1e5 years to cross the fleet. That table lays the ten
+        # thousand probes out in one layer.
+        g = pp.derive(ten_thousand(speed_c=0.05))["geometry"]
         self.assertAlmostEqual(g["area_per_probe_kpc2"], 0.07, delta=0.001)
-        self.assertAlmostEqual(g["spacing_kpc"], 0.27, delta=0.005)
-        self.assertAlmostEqual(g["light_years_per_spacing"] / 880, 1.0,
-                               delta=0.02)
-        self.assertAlmostEqual(g["transit_years_per_spacing"] / 1.8e4, 1.0,
-                               delta=0.04)
+        self.assertAlmostEqual(g["layer_spacing_kpc"], 0.27, delta=0.005)
+        layer_light = g["layer_spacing_kpc"] * pp.KPC_M / pp.LIGHT_YEAR_M
+        self.assertAlmostEqual(layer_light / 880, 1.0, delta=0.02)
+        self.assertAlmostEqual(layer_light / 0.05 / 1.8e4, 1.0, delta=0.04)
         self.assertAlmostEqual(g["crossing_light_years"] / 1e5, 1.0,
                                delta=0.03)
-        # At the speed of the plan a transit takes half as long.
-        plan = pp.derive(pp.Scenario())["geometry"]
-        self.assertAlmostEqual(plan["transit_years_per_spacing"] / 8.7e3,
-                               1.0, delta=0.01)
+        # The disc is 0.7 kiloparsecs thick, 2.6 of those spacings, so the
+        # probes do not fit in one layer. Filling the disc they lie 0.37
+        # kiloparsecs apart, 1,200 years of light time.
+        self.assertTrue(g["stacked"])
+        self.assertAlmostEqual(g["spacing_kpc"], 0.367, delta=0.001)
+        self.assertAlmostEqual(g["spacing_kpc"] ** 3,
+                               g["area_per_probe_kpc2"] * 0.7)
+        self.assertAlmostEqual(g["layers"], 0.7 / 0.367, delta=0.01)
+        self.assertAlmostEqual(g["light_years_per_spacing"] / 1197, 1.0,
+                               delta=0.01)
+        self.assertAlmostEqual(g["transit_years_per_spacing"] / 2.39e4, 1.0,
+                               delta=0.01)
+
+    def test_a_billion_probes(self):
+        # The plan: each probe has a cube 7.9 parsecs wide, 26 years of
+        # light time and 260 years of travel from the next one. Counted
+        # in one layer they would lie 0.84 parsecs apart, closer than the
+        # stars.
+        g = pp.derive(pp.Scenario())["geometry"]
+        self.assertTrue(g["stacked"])
+        self.assertAlmostEqual(g["spacing_kpc"] * 1000, 7.91, delta=0.01)
+        self.assertAlmostEqual(g["layer_spacing_kpc"] * 1000, 0.841,
+                               delta=0.001)
+        self.assertAlmostEqual(g["layers"], 88.5, delta=0.5)
+        self.assertAlmostEqual(g["light_years_per_spacing"], 25.8, delta=0.1)
+        self.assertAlmostEqual(g["transit_years_per_spacing"], 258,
+                               delta=1)
+        # The consolidation cycle of ten thousand years is 39 such
+        # transits, and longer than the survey itself.
+        self.assertAlmostEqual(g["cadence_in_transits"], 38.8, delta=0.1)
+        self.assertEqual(g["useful_relay_hops"], [39, 78])
+        text = " ".join(pp.render_report(pp.derive(pp.Scenario())).split())
+        self.assertIn("mean probe spacing: 7.91 parsecs", text)
+        self.assertIn("the probes fill the disc, 89 deep", text)
+        self.assertIn("they would lie 0.841 parsecs apart", text)
 
     def test_identities(self):
-        sc = pp.Scenario(probes=2500, disc_radius_kpc=12.0, speed_c=0.08)
+        # Few probes: one layer, as in the regime table.
+        sc = ten_thousand(probes=250, disc_radius_kpc=12.0, speed_c=0.08)
         g = pp.derive(sc)["geometry"]
+        self.assertFalse(g["stacked"])
+        self.assertEqual(g["layers"], 1.0)
+        self.assertEqual(g["spacing_kpc"], g["layer_spacing_kpc"])
         self.assertAlmostEqual(g["area_per_probe_kpc2"] * sc.probes,
                                math.pi * 12.0 ** 2)
         self.assertAlmostEqual(g["spacing_kpc"] ** 2,
@@ -967,50 +1029,74 @@ class TestFleetGeometry(unittest.TestCase):
         self.assertAlmostEqual(
             g["transit_years_per_spacing"] * sc.speed_c,
             g["light_years_per_spacing"])
+        # Many probes: they fill the disc, and the two ways of counting
+        # meet where one layer is exactly as deep as the disc.
+        deep = pp.derive(ten_thousand(probes=2500, disc_radius_kpc=12.0))
+        self.assertTrue(deep["geometry"]["stacked"])
+        self.assertAlmostEqual(
+            deep["geometry"]["spacing_kpc"] ** 3,
+            deep["geometry"]["area_per_probe_kpc2"] * 0.7)
+        edge = math.pi * 12.0 ** 2 / 0.7 ** 2          # probes at the meeting
+        below = pp.derive(ten_thousand(probes=int(edge) - 1,
+                                       disc_radius_kpc=12.0))["geometry"]
+        above = pp.derive(ten_thousand(probes=int(edge) + 2,
+                                       disc_radius_kpc=12.0))["geometry"]
+        self.assertFalse(below["stacked"])
+        self.assertTrue(above["stacked"])
+        self.assertAlmostEqual(below["spacing_kpc"], above["spacing_kpc"],
+                               delta=0.003)
 
     def test_follows_probes_radius_and_speed(self):
-        base = pp.derive(pp.Scenario())["geometry"]
-        more = pp.derive(pp.Scenario(probes=40_000))["geometry"]
-        wide = pp.derive(pp.Scenario(disc_radius_kpc=30.0))["geometry"]
-        fast = pp.derive(pp.Scenario(speed_c=0.2))["geometry"]
+        base = pp.derive(ten_thousand())["geometry"]
+        more = pp.derive(ten_thousand(probes=80_000))["geometry"]
+        wide = pp.derive(ten_thousand(disc_radius_kpc=30.0))["geometry"]
+        fast = pp.derive(ten_thousand(speed_c=0.2))["geometry"]
+        # Filling the disc: eight times the probes halve the spacing, and
+        # twice the radius gives each probe four times the volume.
         self.assertAlmostEqual(more["spacing_kpc"], base["spacing_kpc"] / 2)
-        self.assertAlmostEqual(wide["spacing_kpc"], base["spacing_kpc"] * 2)
+        self.assertAlmostEqual(wide["spacing_kpc"],
+                               base["spacing_kpc"] * 4 ** (1 / 3))
         self.assertAlmostEqual(fast["transit_years_per_spacing"],
                                base["transit_years_per_spacing"] / 2)
         self.assertAlmostEqual(fast["light_years_per_spacing"],
                                base["light_years_per_spacing"])
-        text = pp.render_report(pp.derive(pp.Scenario(probes=100,
+        text = pp.render_report(pp.derive(ten_thousand(probes=100,
                                                       speed_c=0.2)))
         self.assertIn("2.66 kiloparsecs", text)
         self.assertNotIn("0.27 kiloparsecs", text)
+        self.assertIn("on a lattice with six neighbors", text)
 
     def test_relay_reach_follows_cadence_and_speed(self):
         # Physical Layer 4.2: reach over spacing = cycles x cadence / transit.
-        g = pp.derive(pp.Scenario())["geometry"]
+        g = pp.derive(ten_thousand())["geometry"]
         low, high = g["relay_reach_spacings"]
         self.assertAlmostEqual(
             low, 10_000.0 / g["transit_years_per_spacing"])
         self.assertAlmostEqual(high, 2 * low)
-        self.assertEqual(g["useful_relay_hops"], [2, 3])
+        # Ten thousand probes filling the disc, at 0.1 of light speed: a
+        # transit takes 12,000 years, the cycle is 0.84 of that, and one
+        # to two hops are useful, as the specification has it.
+        self.assertAlmostEqual(g["cadence_in_transits"], 0.84, delta=0.01)
+        self.assertEqual(g["useful_relay_hops"], [1, 2])
         self.assertEqual(g["spec_hop_limit"], 2)
-        # At the nominal speed of Physical Layer section 1.
-        slow = pp.derive(pp.Scenario(speed_c=0.05))["geometry"]
-        self.assertEqual(slow["useful_relay_hops"], [1, 2])
-        slow_cycle = pp.derive(pp.Scenario(
+        # At the nominal speed of Physical Layer section 1 one hop does.
+        slow = pp.derive(ten_thousand(speed_c=0.05))["geometry"]
+        self.assertEqual(slow["useful_relay_hops"], [1, 1])
+        slow_cycle = pp.derive(ten_thousand(
             speed_c=0.05, consolidation_years=40_000.0))["geometry"]
-        self.assertEqual(slow_cycle["useful_relay_hops"], [3, 5])
+        self.assertEqual(slow_cycle["useful_relay_hops"], [2, 4])
 
     def test_station_layouts_follow_the_probe_spacing(self):
         for probes in (10_000, 100):
             for name in ("full-network", "stations-only"):
-                r = pp.derive(pp.Scenario(archives=name, probes=probes))
+                r = pp.derive(ten_thousand(archives=name, probes=probes))
                 self.assertAlmostEqual(r["layout"]["cache_spacing_kpc"],
                                        r["geometry"]["spacing_kpc"])
         self.assertIsNone(
-            pp.derive(pp.Scenario(archives="none"))["layout"]
+            pp.derive(ten_thousand(archives="none"))["layout"]
             ["cache_spacing_kpc"])
         self.assertEqual(
-            pp.derive(pp.Scenario(archives="sparse"))["layout"]
+            pp.derive(ten_thousand(archives="sparse"))["layout"]
             ["cache_spacing_kpc"], 5.0)
 
 
@@ -1020,34 +1106,34 @@ class TestReportWording(unittest.TestCase):
 
     def texts(self):
         for name in pp.ARCHIVE_PRESETS:
-            r = pp.derive(pp.Scenario(archives=name))
+            r = pp.derive(ten_thousand(archives=name))
             yield "report %s" % name, pp.render_report(r)
             yield "canonical %s" % name, pp.render_report(r, canonical=True)
             yield "explain %s" % name, pp.render_explain(r)
-        odd = pp.derive(pp.Scenario(archives="none", cache_spacing_kpc=3.0,
+        odd = pp.derive(ten_thousand(archives="none", cache_spacing_kpc=3.0,
                                     probes=1_000_000_000,
                                     attrition_per_year=1e-8))
         yield "odd report", pp.render_report(odd)
         yield "odd explain", pp.render_explain(odd)
-        short = pp.derive(pp.Scenario(systems=2e5))
+        short = pp.derive(ten_thousand(systems=2e5))
         yield "short survey", pp.render_report(short)
         for name in pp.STRATEGIES:
             for kwargs in [dict(), dict(galaxy_model="uniform"),
                            dict(depth=0.4, acceleration_m_s2=0.002),
                            dict(probes=400_000)]:
-                other = pp.derive(pp.Scenario(strategy=name, **kwargs))
+                other = pp.derive(ten_thousand(strategy=name, **kwargs))
                 yield "strategy %s" % name, pp.render_report(other)
                 yield "strategy %s canonical" % name, pp.render_report(
                     other, canonical=True)
                 yield "strategy %s explain" % name, pp.render_explain(other)
-        lossy = pp.derive(pp.Scenario(attrition_per_year=5e-10))
+        lossy = pp.derive(ten_thousand(attrition_per_year=5e-10))
         yield "further passes out of reach", pp.render_report(lossy)
         for kwargs in [dict(), dict(stellar_density=0.1, systems=2e11),
                        dict(acceleration_m_s2=0.003),
                        dict(speed_c=0.2, exhaust_speed_c=0.05,
                             refuel_years_per_mass=1.0),
                        dict(galaxy_model="uniform", scale_length_kpc=3.0)]:
-            sc = pp.Scenario(**kwargs)
+            sc = ten_thousand(**kwargs)
             ranged = pp.derive(sc)
             ranges = pp.builtin_ranges()
             ranges["attrition_per_year"] = dict(low=1e-12, high=1e-8,
@@ -1105,8 +1191,8 @@ class TestStopAndGo(unittest.TestCase):
             2 * math.sqrt(self.HOP_M / 0.001) / pp.YEAR_S)
 
     def test_very_strong_engines_recover_instant_stops(self):
-        instant = pp.derive(pp.Scenario())
-        strong = pp.derive(pp.Scenario(acceleration_m_s2=1e9))
+        instant = pp.derive(ten_thousand())
+        strong = pp.derive(ten_thousand(acceleration_m_s2=1e9))
         self.assertAlmostEqual(strong["total_years"] / instant["total_years"],
                                1.0, places=9)
         self.assertEqual(instant["kinematics"]["extra_hop_fraction"], 0.0)
@@ -1116,7 +1202,7 @@ class TestStopAndGo(unittest.TestCase):
         # Where every hop reaches cruise speed the time is linear in the
         # hop length, so the average must equal the closed form. This
         # checks the weights of the numerical average (they sum to one).
-        sc = pp.Scenario()
+        sc = ten_thousand()
         gal = pp.derive(sc)["galaxy"]
         v, a = sc.speed_c * pp.C_M_PER_S, 50.0
         for part in gal["parts"]:
@@ -1130,7 +1216,7 @@ class TestStopAndGo(unittest.TestCase):
         # Found by a sweep over random scenarios: the weights of the
         # numerical average summed to 1.00007 here, so the share of hops
         # reaching cruise speed could exceed one.
-        sc = pp.Scenario(disc_radius_kpc=3.9, scale_length_kpc=11.2,
+        sc = ten_thousand(disc_radius_kpc=3.9, scale_length_kpc=11.2,
                          bulge_fraction=0.0, acceleration_m_s2=0.035,
                          speed_c=0.09)
         r = pp.derive(sc)
@@ -1180,13 +1266,13 @@ class TestStopAndGo(unittest.TestCase):
         self.assertLess(r["kinematics"]["hops_reaching_cruise"], 0.9)
 
     def test_weaker_engines_always_take_longer(self):
-        totals = [pp.derive(pp.Scenario(acceleration_m_s2=a))["total_years"]
+        totals = [pp.derive(ten_thousand(acceleration_m_s2=a))["total_years"]
                   for a in (None, 10.0, 1.0, 0.1, 0.01, 0.001, 0.0001)]
         self.assertEqual(totals, sorted(totals))
         self.assertEqual(len(set(totals)), len(totals))
 
     def test_scattering_and_detours_start_and_end_at_rest_too(self):
-        sc = pp.Scenario(acceleration_m_s2=0.05, archives="stations-only")
+        sc = ten_thousand(acceleration_m_s2=0.05, archives="stations-only")
         r = pp.derive(sc)
         v = sc.speed_c * pp.C_M_PER_S
         self.assertAlmostEqual(
@@ -1560,20 +1646,24 @@ class TestStrategies(unittest.TestCase):
     """Other ways of running the survey, compared with the specification."""
 
     def test_default_is_the_plan(self):
-        # Completion recorded by system, probes waiting at the mid-plane.
-        # The specification as it stands, by regions, comes first in the
-        # list and stays one flag away.
-        self.assertEqual(pp.Scenario().strategy, "systems-midplane")
-        self.assertEqual(pp.derive(pp.Scenario())["strategy"],
-                         "systems-midplane")
-        self.assertEqual(parse([]).strategy, "systems-midplane")
+        # A billion probes, completion recorded by system. The
+        # specification as it stands, by regions, comes first in the list
+        # and stays one flag away. Waiting at the mid-plane is still there
+        # for the far smaller fleets it suits.
+        self.assertEqual(pp.Scenario().probes, 10 ** 9)
+        self.assertEqual(pp.Scenario().strategy, "systems")
+        self.assertEqual(pp.derive(pp.Scenario())["strategy"], "systems")
+        self.assertEqual(parse([]).strategy, "systems")
+        self.assertEqual(parse([]).probes, 10 ** 9)
         self.assertEqual(list(pp.STRATEGIES)[0], "regions")
         self.assertEqual(parse(["--strategy", "regions"]).strategy,
                          "regions")
-        self.assertIn("default systems-midplane",
-                      " ".join(pp.build_parser().format_help().split()))
+        help_text = " ".join(pp.build_parser().format_help().split())
+        self.assertIn("default systems;", help_text)
+        self.assertIn("default 1000000000, one billion", help_text)
+        self.assertEqual(ten_thousand().strategy, "systems-midplane")
         with self.assertRaises(ValueError):
-            pp.derive(pp.Scenario(strategy="teleport"))
+            pp.derive(ten_thousand(strategy="teleport"))
         for name in pp.STRATEGIES:
             r = pp.derive(parse(["--strategy", name]))
             self.assertEqual(r["strategy"], name)
@@ -1598,7 +1688,7 @@ class TestStrategies(unittest.TestCase):
         # points starts at 0.65 too and ends at 0.78 on average. This is
         # a small run.
         self.assertEqual(pp.OPEN_FIELD_HOP, 0.65)
-        self.assertEqual(pp.CLEARED_FIELD_HOP, pp.Scenario().path_factor)
+        self.assertEqual(pp.CLEARED_FIELD_HOP, ten_thousand().path_factor)
         traveled = simulate_open_field()
         for share, per_system in traveled.items():
             even = 1.5 * (1 - (1 - share) ** (2 / 3))
@@ -1606,40 +1696,40 @@ class TestStrategies(unittest.TestCase):
                                    delta=0.03)
 
     def test_records_by_system_shorten_the_first_hops(self):
-        base = pp.derive(pp.Scenario(strategy="regions"))
+        base = pp.derive(ten_thousand(strategy="regions"))
         for path_factor in (0.78, 1.0):
-            by_region = pp.derive(pp.Scenario(strategy="regions",
+            by_region = pp.derive(ten_thousand(strategy="regions",
                                               path_factor=path_factor))
-            by_system = pp.derive(pp.Scenario(strategy="systems",
+            by_system = pp.derive(ten_thousand(strategy="systems",
                                               path_factor=path_factor))
             self.assertAlmostEqual(
                 by_system["hop_parsec"] / by_region["hop_parsec"],
                 0.65 / 0.78)
         self.assertAlmostEqual(
-            pp.derive(pp.Scenario(strategy="systems"))["hop_parsec"],
+            pp.derive(ten_thousand(strategy="systems"))["hop_parsec"],
             0.65 * base["galaxy"]["mean_spacing_pc"])
         # The route through a region is not touched.
         self.assertAlmostEqual(base["hop_parsec"],
                                0.78 * base["galaxy"]["mean_spacing_pc"])
         text = " ".join(line.strip() for line in pp.render_report(
-            pp.derive(pp.Scenario(strategy="systems"))).splitlines())
+            pp.derive(ten_thousand(strategy="systems"))).splitlines())
         self.assertIn("its hops are 0.65 times the spacing of the systems "
                       "still to do, against 0.78", text)
         self.assertIn("path_factor x 0.65 / 0.78", pp.render_explain(
-            pp.derive(pp.Scenario(strategy="systems"))))
+            pp.derive(ten_thousand(strategy="systems"))))
         self.assertNotIn("0.65 / 0.78", pp.render_explain(base))
 
     def test_hop_spread_and_engines_follow_the_first_hops(self):
-        by_region = pp.derive(pp.Scenario(strategy="regions"))
+        by_region = pp.derive(ten_thousand(strategy="regions"))
         for name in pp.RECORDS_BY_SYSTEM:
-            r = pp.derive(pp.Scenario(strategy=name))
+            r = pp.derive(ten_thousand(strategy=name))
             # the spread of hop lengths is that of the first hops
             pct = r["hop_percentiles_parsec"]
             self.assertLess(pct["5"], pct["50"])
             self.assertLess(pct["50"], r["hop_parsec"])
             self.assertLess(r["hop_parsec"], pct["95"])
             # what an engine adds is measured on the same hops
-            given = {a: pp.derive(pp.Scenario(strategy=name,
+            given = {a: pp.derive(ten_thousand(strategy=name,
                                               acceleration_m_s2=a))
                      for a in pp.REFERENCE_ACCELERATIONS}
             for row in r["kinematics"]["reference"]:
@@ -1647,14 +1737,14 @@ class TestStrategies(unittest.TestCase):
                 self.assertAlmostEqual(
                     row["extra_hop_fraction"],
                     run["kinematics"]["extra_hop_fraction"])
-        plain = pp.derive(pp.Scenario(strategy="systems"))
+        plain = pp.derive(ten_thousand(strategy="systems"))
         for key, value in plain["hop_percentiles_parsec"].items():
             self.assertAlmostEqual(
                 value / by_region["hop_percentiles_parsec"][key], 0.65 / 0.78)
 
     def test_records_by_system_lengthen_hops_not_stays(self):
-        base = pp.derive(pp.Scenario(strategy="regions"))
-        r = pp.derive(pp.Scenario(strategy="systems"))
+        base = pp.derive(ten_thousand(strategy="regions"))
+        r = pp.derive(ten_thousand(strategy="systems"))
         first = base["hop_years"] * 0.65 / 0.78
         self.assertAlmostEqual(r["hop_thinning"], 1.5, places=9)
         self.assertEqual(base["hop_thinning"], 1.0)
@@ -1673,7 +1763,7 @@ class TestStrategies(unittest.TestCase):
         self.assertEqual(r["reached"]["seen_after_one_pass"], 1.0)
         self.assertEqual(r["reached"]["repeat_visit_share"], 0.0)
         # Speeding up and slowing down is not stretched, only the cruise.
-        slow = pp.derive(pp.Scenario(strategy="systems",
+        slow = pp.derive(ten_thousand(strategy="systems",
                                      acceleration_m_s2=0.05))
         cruise = slow["hop_parsec"] * pp.PARSEC_M / slow["speed_m_per_s"] \
             / pp.YEAR_S
@@ -1684,7 +1774,7 @@ class TestStrategies(unittest.TestCase):
         # Where nearly every hop reaches cruise speed, that is the full
         # time to speed up and slow down.
         self.assertLess(slow["kinematics"]["hops_reaching_cruise"], 0.99)
-        strong = pp.derive(pp.Scenario(strategy="systems",
+        strong = pp.derive(ten_thousand(strategy="systems",
                                        acceleration_m_s2=1.0))
         self.assertGreater(strong["kinematics"]["hops_reaching_cruise"],
                            0.999)
@@ -1716,10 +1806,10 @@ class TestStrategies(unittest.TestCase):
 
         # One density throughout: every system is equally likely to be
         # next, and the distance follows (1 - share)^(-1/3).
-        check(pp.Scenario(strategy="systems", galaxy_model="uniform"),
+        check(ten_thousand(strategy="systems", galaxy_model="uniform"),
               lambda r, share: 1.5 * (1 - (1 - share) ** (2 / 3)))
-        check(pp.Scenario(strategy="systems-midplane"), by_part)
-        r = check(pp.Scenario(strategy="systems"), by_part)
+        check(ten_thousand(strategy="systems-midplane"), by_part)
+        r = check(ten_thousand(strategy="systems"), by_part)
         # Half the systems take less than half the time, the last tenth
         # more than a tenth.
         half, ninety = r["milestones"][0]["years"], r["milestones"][1]["years"]
@@ -1731,7 +1821,7 @@ class TestStrategies(unittest.TestCase):
             self.assertIsNone(row["passes"])
 
     def test_a_sampled_survey_cannot_see_more_than_it_visits(self):
-        r = pp.derive(pp.Scenario(strategy="systems", depth=0.6))
+        r = pp.derive(ten_thousand(strategy="systems", depth=0.6))
         rows = r["reached"]["rows"]
         self.assertAlmostEqual(r["reached"]["seen_after_one_pass"], 0.6)
         self.assertIsNotNone(rows[0]["years"])           # 50 percent
@@ -1742,7 +1832,7 @@ class TestStrategies(unittest.TestCase):
     # ---- working at the mid-plane --------------------------------------
 
     def test_mid_plane_spacing_is_the_integral_over_the_plane(self):
-        sc = pp.Scenario(strategy="systems-midplane")
+        sc = ten_thousand(strategy="systems-midplane")
         gal = pp.derive(sc)["galaxy"]
         disc, bulge = gal["parts"]
         # Only the disc has a mid-plane to wait at; the bulge is round.
@@ -1759,12 +1849,12 @@ class TestStrategies(unittest.TestCase):
             bottom += r_pc * density * dr
         self.assertAlmostEqual(top / bottom / disc["mean_spacing_pc"], 1.0,
                                places=5)
-        plain = pp.derive(pp.Scenario(strategy="systems"))["galaxy"]
+        plain = pp.derive(ten_thousand(strategy="systems"))["galaxy"]
         self.assertEqual(bulge, plain["parts"][1])
 
     def test_waiting_at_the_mid_plane_saves_nothing_overall(self):
-        plain = pp.derive(pp.Scenario(strategy="systems"))
-        plane = pp.derive(pp.Scenario(strategy="systems-midplane"))
+        plain = pp.derive(ten_thousand(strategy="systems"))
+        plane = pp.derive(ten_thousand(strategy="systems-midplane"))
         # The first hops are shorter: 2/3 of the spacing in the disc.
         self.assertAlmostEqual(
             plane["galaxy"]["parts"][0]["mean_spacing_pc"]
@@ -1796,7 +1886,7 @@ class TestStrategies(unittest.TestCase):
                                delta=0.001)
         self.assertIsNone(plain["plane_left_at_half"])
         # A uniform disc is as dense at the mid-plane as anywhere.
-        flat = [pp.derive(pp.Scenario(strategy=name, galaxy_model="uniform"))
+        flat = [pp.derive(ten_thousand(strategy=name, galaxy_model="uniform"))
                 for name in ("systems", "systems-midplane")]
         self.assertEqual(flat[0]["total_years"], flat[1]["total_years"])
         self.assertEqual(flat[0]["milestones"], flat[1]["milestones"])
@@ -1897,7 +1987,7 @@ class TestStrategies(unittest.TestCase):
                          {"disc", "disc-plane", "bulge", "uniform"})
 
     def test_mid_plane_distribution_is_consistent(self):
-        sc = pp.Scenario(strategy="systems-midplane")
+        sc = ten_thousand(strategy="systems-midplane")
         r = pp.derive(sc)
         gal = r["galaxy"]
         for share in (0.05, 0.5, 0.95):
@@ -1914,7 +2004,7 @@ class TestStrategies(unittest.TestCase):
             mean_m = sc.path_factor * part["mean_spacing_pc"] * pp.PARSEC_M
             self.assertAlmostEqual(seconds / (mean_m / v + v / 1e6), 1.0,
                                    places=4, msg=part["kind"])
-        weak = pp.derive(pp.Scenario(strategy="systems-midplane",
+        weak = pp.derive(ten_thousand(strategy="systems-midplane",
                                      acceleration_m_s2=0.003))
         self.assertGreater(weak["kinematics"]["hops_reaching_cruise"], 0.0)
         self.assertLess(weak["kinematics"]["hops_reaching_cruise"], 1.0)
@@ -1923,13 +2013,13 @@ class TestStrategies(unittest.TestCase):
 
     def test_default_fleet_is_fully_mixed(self):
         for name in pp.RECORDS_BY_SYSTEM:
-            r = pp.derive(pp.Scenario(strategy=name))
+            r = pp.derive(ten_thousand(strategy=name))
             self.assertAlmostEqual(r["mixing"]["crossings"], 29, delta=1)
             self.assertAlmostEqual(r["mixing"]["share"], 1.0, places=9)
-            slow = pp.derive(pp.Scenario(strategy=name, speed_c=0.05))
+            slow = pp.derive(ten_thousand(strategy=name, speed_c=0.05))
             self.assertAlmostEqual(slow["mixing"]["crossings"], 53, delta=1)
         for name in ("regions", "sweep-line"):
-            r = pp.derive(pp.Scenario(strategy=name))
+            r = pp.derive(ten_thousand(strategy=name))
             self.assertIsNone(r["mixing"])
             self.assertIsNone(r["plane_wait"])
 
@@ -1937,9 +2027,9 @@ class TestStrategies(unittest.TestCase):
         # A fleet so large that the survey is over before the stars have
         # moved: recording by system then changes nothing.
         huge = dict(probes=10_000_000_000)
-        by_region = pp.derive(pp.Scenario(strategy="regions", **huge))
+        by_region = pp.derive(ten_thousand(strategy="regions", **huge))
         for name in pp.RECORDS_BY_SYSTEM:
-            r = pp.derive(pp.Scenario(strategy=name, **huge))
+            r = pp.derive(ten_thousand(strategy=name, **huge))
             self.assertLess(r["mixing"]["share"], 0.01)
             self.assertAlmostEqual(r["total_years"] / by_region["total_years"],
                                    1.0, delta=0.001)
@@ -1952,11 +2042,11 @@ class TestStrategies(unittest.TestCase):
             self.assertNotIn("thin out", text)
 
     def test_partial_mixing_lies_between_the_two_laws(self):
-        still = pp.derive(pp.Scenario(strategy="regions"))
-        mixed = pp.derive(pp.Scenario(strategy="systems"))
+        still = pp.derive(ten_thousand(strategy="regions"))
+        mixed = pp.derive(ten_thousand(strategy="systems"))
         previous = None
         for probes in (10_000, 300_000, 3_000_000, 30_000_000, 10 ** 9):
-            r = pp.derive(pp.Scenario(strategy="systems", probes=probes))
+            r = pp.derive(ten_thousand(strategy="systems", probes=probes))
             share = r["mixing"]["share"]
             self.assertAlmostEqual(share,
                                    1 - math.exp(-r["mixing"]["crossings"]))
@@ -1971,7 +2061,7 @@ class TestStrategies(unittest.TestCase):
                 r["hop_parsec"] * r["hop_thinning"],
                 (1 - share) * still["hop_parsec"]
                 + share * 1.5 * mixed["hop_parsec"])
-        r = pp.derive(pp.Scenario(strategy="systems", probes=3_000_000))
+        r = pp.derive(ten_thousand(strategy="systems", probes=3_000_000))
         self.assertGreater(r["mixing"]["share"], 0.05)
         self.assertLess(r["mixing"]["share"], 0.995)
         text = " ".join(x.strip() for x in pp.render_report(r).splitlines())
@@ -1987,24 +2077,24 @@ class TestStrategies(unittest.TestCase):
         # 99 percent, over that of a slab in which every system is equally
         # exposed, for surveys of 7.8, 3.9, 1.9, 1.0 and 0.45 swings:
         # 1.45, 1.47, 1.58, 1.86 and 2.65, the last two with idle probes.
-        r = pp.derive(pp.Scenario(strategy="systems-midplane"))
+        r = pp.derive(ten_thousand(strategy="systems-midplane"))
         wait = r["plane_wait"]
         self.assertTrue(wait["waits"])
         self.assertAlmostEqual(wait["swing_years"], 7 * 350 * pp.PARSEC_M
                                / 2.0e4 / pp.YEAR_S)
         self.assertAlmostEqual(wait["swing_years"] / 1.2e8, 1.0, delta=0.01)
         self.assertAlmostEqual(wait["swings"], 5.1, delta=0.1)
-        self.assertAlmostEqual(pp.derive(pp.Scenario(
+        self.assertAlmostEqual(pp.derive(ten_thousand(
             strategy="systems-midplane", speed_c=0.05))
             ["plane_wait"]["swings"], 9.4, delta=0.1)
         self.assertEqual(r["galaxy"]["parts"][0]["kind"], "disc-plane")
         self.assertIsNone(
-            pp.derive(pp.Scenario(strategy="systems"))["plane_wait"])
+            pp.derive(ten_thousand(strategy="systems"))["plane_wait"])
         # Ten times the fleet: the survey lasts half a swing, and the
         # probes go to the systems instead.
-        short = pp.derive(pp.Scenario(strategy="systems-midplane",
+        short = pp.derive(ten_thousand(strategy="systems-midplane",
                                       probes=100_000))
-        plain = pp.derive(pp.Scenario(strategy="systems", probes=100_000))
+        plain = pp.derive(ten_thousand(strategy="systems", probes=100_000))
         self.assertFalse(short["plane_wait"]["waits"])
         self.assertLess(short["plane_wait"]["swings"],
                         pp.PLANE_SWINGS_NEEDED)
@@ -2017,7 +2107,7 @@ class TestStrategies(unittest.TestCase):
         self.assertIn("Waiting at the mid-plane does not work for a survey "
                       "this short", text)
         # A uniform disc has no mid-plane to wait at.
-        self.assertIsNone(pp.derive(pp.Scenario(
+        self.assertIsNone(pp.derive(ten_thousand(
             strategy="systems-midplane",
             galaxy_model="uniform"))["plane_wait"])
 
@@ -2025,7 +2115,7 @@ class TestStrategies(unittest.TestCase):
         for name in pp.RECORDS_BY_SYSTEM:
             for probes in (10_000, 100_000, 3_000_000, 10 ** 9):
                 for extra in ({}, {"galaxy_model": "uniform"}):
-                    r = pp.derive(pp.Scenario(strategy=name, probes=probes,
+                    r = pp.derive(ten_thousand(strategy=name, probes=probes,
                                               **extra))
                     for text in (pp.render_report(r), pp.render_explain(r),
                                  pp.render_report(r, canonical=True)):
@@ -2050,7 +2140,7 @@ class TestStrategies(unittest.TestCase):
         self.assertAlmostEqual(pp.line_seen(0.25, 3.0), 1 - 0.25 ** 3)
 
     def test_crossings_capacity_and_staffing(self):
-        sc = pp.Scenario(strategy="sweep-line")
+        sc = ten_thousand(strategy="sweep-line")
         r = pp.derive(sc)
         gal, line = r["galaxy"], r["reached"]["line"]
         scale, radius = gal["scale_length_pc"], gal["disc_radius_pc"]
@@ -2075,7 +2165,7 @@ class TestStrategies(unittest.TestCase):
         self.assertAlmostEqual(line["rim_turn_years"] / 4.0e8, 1.0,
                                delta=0.01)
         # A uniform disc has no bulge: every system is on the line.
-        flat = pp.derive(pp.Scenario(strategy="sweep-line",
+        flat = pp.derive(ten_thousand(strategy="sweep-line",
                                      galaxy_model="uniform"))
         self.assertEqual(flat["reached"]["line"]["share_of_systems"], 1.0)
         self.assertAlmostEqual(
@@ -2083,7 +2173,7 @@ class TestStrategies(unittest.TestCase):
             1e11 / (math.pi * radius ** 2) * radius * speed)
 
     def test_bigger_fleets_miss_fewer(self):
-        missed = [pp.derive(pp.Scenario(strategy="sweep-line", probes=n))
+        missed = [pp.derive(ten_thousand(strategy="sweep-line", probes=n))
                   ["reached"]["line"]["missed_per_sweep"]
                   for n in (300, 3_000, 30_000, 300_000, 3_000_000)]
         self.assertEqual(missed, sorted(missed, reverse=True))
@@ -2094,7 +2184,7 @@ class TestStrategies(unittest.TestCase):
 
     def test_line_model_against_a_direct_simulation(self):
         for probes in (10_000, 40_000):
-            sc = pp.Scenario(strategy="sweep-line", probes=probes)
+            sc = ten_thousand(strategy="sweep-line", probes=probes)
             model = 1.0 - pp.derive(sc)["reached"]["line"]["missed_per_sweep"]
             seen, visits, years = simulate_line(sc)
             self.assertAlmostEqual(seen, model, delta=0.04, msg=probes)
@@ -2103,7 +2193,7 @@ class TestStrategies(unittest.TestCase):
 
     def test_moving_against_the_rotation_helps_only_a_fleet_that_waits(self):
         def pair(**inputs):
-            sc = pp.Scenario(strategy="sweep-line", **inputs)
+            sc = ten_thousand(strategy="sweep-line", **inputs)
             # Backward at the rate the stars have at half the disc radius.
             backward = (pp.ROTATION_SPEED_M_S * pp.YEAR_S / pp.PARSEC_M
                         / (sc.disc_radius_kpc * 500.0))
@@ -2126,7 +2216,7 @@ class TestStrategies(unittest.TestCase):
         still, moving = pair(speed_c=0.1, probes=40_000)
         self.assertAlmostEqual(still[2] / moving[2], 3.0, delta=0.1)
         self.assertGreater(moving[0], still[0])
-        text = " ".join(pp.render_report(pp.derive(pp.Scenario(
+        text = " ".join(pp.render_report(pp.derive(ten_thousand(
             strategy="sweep-line"))).split())
         self.assertIn("it shortens the sweep only where the fleet would "
                       "otherwise be held up by the turning of the disc", text)
@@ -2138,11 +2228,11 @@ class TestStrategies(unittest.TestCase):
         rim_turn = (2 * math.pi * 15 * pp.KPC_M / pp.ROTATION_SPEED_M_S
                     / pp.YEAR_S)
         self.assertAlmostEqual(rim_turn / 4.01e8, 1.0, delta=0.005)
-        small = pp.derive(pp.Scenario(strategy="sweep-line"))
+        small = pp.derive(ten_thousand(strategy="sweep-line"))
         self.assertEqual(small["phases"]["line_wait_years"], 0.0)
         self.assertNotIn("waiting for the disc to turn",
                          pp.render_report(small))
-        big = pp.derive(pp.Scenario(strategy="sweep-line", probes=200_000))
+        big = pp.derive(ten_thousand(strategy="sweep-line", probes=200_000))
         self.assertGreater(big["phases"]["line_wait_years"], 0.0)
         self.assertAlmostEqual(
             (big["total_years"] - big["phases"]["dispersal_years"])
@@ -2156,7 +2246,7 @@ class TestStrategies(unittest.TestCase):
         self.assertEqual(regions["phases"]["line_wait_years"], 0.0)
 
     def test_sweeps_needed(self):
-        r = pp.derive(pp.Scenario(strategy="sweep-line"))
+        r = pp.derive(ten_thousand(strategy="sweep-line"))
         reached, line = r["reached"], r["reached"]["line"]
         self.assertEqual(reached["unit"], "sweep")
         self.assertEqual(r["milestones_count"], "line")
@@ -2184,12 +2274,12 @@ class TestStrategies(unittest.TestCase):
 
     def test_every_report_compares_all_strategies(self):
         for name in pp.STRATEGIES:
-            r = pp.derive(pp.Scenario(strategy=name))
+            r = pp.derive(ten_thousand(strategy=name))
             rows = r["strategies"]
             self.assertEqual([row["strategy"] for row in rows],
                              list(pp.STRATEGIES))
             for row in rows:
-                own = pp.derive(pp.Scenario(strategy=row["strategy"]))
+                own = pp.derive(ten_thousand(strategy=row["strategy"]))
                 self.assertAlmostEqual(
                     row["years_to_99_percent"],
                     own["reached"]["rows"][-1]["years"])
@@ -2205,7 +2295,7 @@ class TestStrategies(unittest.TestCase):
 
     def test_ranking_for_the_default_fleet(self):
         rows = {row["strategy"]: row
-                for row in pp.derive(pp.Scenario())["strategies"]}
+                for row in pp.derive(ten_thousand())["strategies"]}
         # 2.9, 1.9, 0.71 and 0.71 billion years: recording by system is
         # what counts, not where the probes wait.
         for name, expected in (("regions", 2.86e9), ("sweep-line", 1.924e9),
@@ -2221,7 +2311,7 @@ class TestStrategies(unittest.TestCase):
     def test_headline_says_what_it_covers(self):
         def block(name):
             lines = pp.render_report(
-                pp.derive(pp.Scenario(strategy=name))).splitlines()
+                pp.derive(ten_thousand(strategy=name))).splitlines()
             at = next(i for i, line in enumerate(lines) if "HEADLINE" in line)
             return " ".join(x.strip() for x in lines[at:lines.index("", at)])
         self.assertIn("one pass over every region", block("regions"))
@@ -2229,14 +2319,14 @@ class TestStrategies(unittest.TestCase):
         self.assertIn("reaches about 80% of the systems", block("sweep-line"))
         for name in pp.RECORDS_BY_SYSTEM:
             self.assertNotIn("reaches about", block(name))
-        report = pp.render_report(pp.derive(pp.Scenario(strategy="systems")))
+        report = pp.render_report(pp.derive(ten_thousand(strategy="systems")))
         self.assertIn("Milestones (share of systems surveyed)", report)
         self.assertIn("Milestones (share of the line swept)", pp.render_report(
-            pp.derive(pp.Scenario(strategy="sweep-line"))))
+            pp.derive(ten_thousand(strategy="sweep-line"))))
 
     def test_uncertainty_mode_runs_for_every_strategy(self):
         for name in pp.STRATEGIES:
-            sc = pp.Scenario(strategy=name)
+            sc = ten_thousand(strategy=name)
             u = pp.run_uncertainty(sc, pp.builtin_ranges(), draws=60)
             self.assertLess(u["percentiles_years"]["5"],
                             u["percentiles_years"]["95"])
@@ -2406,7 +2496,7 @@ class TestKnowledge(unittest.TestCase):
 
     def test_duplicated_work_follows_the_age_of_knowledge(self):
         for name in pp.RECORDS_BY_SYSTEM:
-            r = pp.derive(pp.Scenario(strategy=name))
+            r = pp.derive(ten_thousand(strategy=name))
             know = r["knowledge"]
             parts = r["staleness_parts_years"]
             # What the probe read is older by its own interval as well.
@@ -2431,7 +2521,7 @@ class TestKnowledge(unittest.TestCase):
         self.assertNotIn("reading_interval", by["staleness_parts_years"])
 
     def test_wasted_time_in_a_uniform_disc_without_stays(self):
-        sc = pp.Scenario(strategy="systems", galaxy_model="uniform",
+        sc = ten_thousand(strategy="systems", galaxy_model="uniform",
                          dwell_years=0.0)
         r = pp.derive(sc)
         self.assertAlmostEqual(r["mixing"]["share"], 1.0, places=6)
@@ -2447,7 +2537,7 @@ class TestKnowledge(unittest.TestCase):
             / (0.9999 * (closed(u1) - closed(u0))), 1.0, delta=0.01)
 
     def test_how_fresh_knowledge_must_be(self):
-        r = pp.derive(pp.Scenario())
+        r = pp.derive(ten_thousand())
         know = r["knowledge"]
         self.assertEqual(know["confidence"], 0.95)
         need = 0.05 / 0.95 ** 2
@@ -2469,13 +2559,13 @@ class TestKnowledge(unittest.TestCase):
                                math.log(100.0) / need)
         self.assertAlmostEqual(know["readings_until_99_percent"], 83.1,
                                delta=0.1)
-        # The default layout delivers it within 159 thousand years: nine
+        # The default layout delivers it within 160 thousand years: nine
         # times fresher than needed at 99 percent.
         self.assertAlmostEqual(r["staleness_years"] / 1.59e5, 1.0, delta=0.01)
         self.assertAlmostEqual(know["sure_until_share"], 0.9997,
                                delta=0.0001)
         # Being surer asks for fresher knowledge, in proportion.
-        surer = pp.derive(pp.Scenario(confidence=0.99))["knowledge"]
+        surer = pp.derive(ten_thousand(confidence=0.99))["knowledge"]
         self.assertAlmostEqual(
             surer["fresh_enough_years"]["0.5"]
             / know["fresh_enough_years"]["0.5"],
@@ -2483,29 +2573,29 @@ class TestKnowledge(unittest.TestCase):
         self.assertLess(surer["sure_until_share"], know["sure_until_share"])
         # It changes what the report asks for, never the survey time.
         self.assertEqual(
-            pp.derive(pp.Scenario(confidence=0.99))["total_years"],
+            pp.derive(ten_thousand(confidence=0.99))["total_years"],
             r["total_years"])
 
     def test_layouts_that_keep_knowledge_less_fresh(self):
         shares, totals = [], []
         for name in ("full-network", "stations-only", "sparse"):
-            r = pp.derive(pp.Scenario(archives=name))
+            r = pp.derive(ten_thousand(archives=name))
             shares.append(r["knowledge"]["sure_until_share"])
             totals.append(r["phases"]["duplicated_work_years"])
         self.assertEqual(shares, sorted(shares, reverse=True))
         self.assertEqual(totals, sorted(totals))
         self.assertAlmostEqual(shares[1], 0.99, delta=0.005)
         self.assertAlmostEqual(shares[2], 0.87, delta=0.01)
-        none = pp.derive(pp.Scenario(archives="none"))
+        none = pp.derive(ten_thousand(archives="none"))
         self.assertEqual(none["knowledge"]["sure_until_share"], 0.0)
         self.assertEqual(none["duplication_fraction"], 0.5)
         # Knowledge 15 million years old is too old from the first hop.
-        old = pp.derive(pp.Scenario(region_systems=1e5, deposit_every=2))
+        old = pp.derive(ten_thousand(region_systems=1e5, deposit_every=2))
         self.assertGreater(old["staleness_years"],
                            old["knowledge"]["fresh_enough_years"]["0.0"])
         self.assertEqual(old["knowledge"]["sure_until_share"], 0.0)
         # A single probe has nobody's work to learn of.
-        alone = pp.derive(pp.Scenario(probes=1))
+        alone = pp.derive(ten_thousand(probes=1))
         self.assertEqual(alone["duplication_fraction"], 0.0)
         self.assertEqual(alone["knowledge"]["sure_until_share"], 1.0)
         json.dumps(pp.json_safe(alone), allow_nan=False)
@@ -2515,7 +2605,7 @@ class TestKnowledge(unittest.TestCase):
     def test_fewer_larger_deposits_trade_side_trips_for_stale_knowledge(self):
         # Side trips fall and wasted visits rise with the systems per
         # deposit; the total is lowest in between.
-        runs = [pp.derive(pp.Scenario(region_systems=n))
+        runs = [pp.derive(ten_thousand(region_systems=n))
                 for n in (100.0, 1000.0, 3000.0, 1e4, 1e5)]
         trips = [r["phases"]["archive_detours_years"] for r in runs]
         waste = [r["phases"]["duplicated_work_years"] for r in runs]
@@ -2526,13 +2616,13 @@ class TestKnowledge(unittest.TestCase):
         self.assertGreater(totals[0] / min(totals), 1.07)
         self.assertGreater(totals[4] / min(totals), 1.10)
         # A box left in a surveyed system needs no side trip.
-        free = pp.derive(pp.Scenario(detour_kpc=0.0))
+        free = pp.derive(ten_thousand(detour_kpc=0.0))
         self.assertEqual(free["phases"]["archive_detours_years"], 0.0)
 
     def test_report_and_inputs(self):
-        text = " ".join(pp.render_report(pp.derive(pp.Scenario())).split())
+        text = " ".join(pp.render_report(pp.derive(ten_thousand())).split())
         for phrase in ["what a probe knows of the work of the others is up "
-                       "to 159 thousand years old",
+                       "to 160 thousand years old",
                        "between readings of the archives",
                        "For the probe to be right 95% of the time "
                        "(--confidence)",
@@ -2544,14 +2634,14 @@ class TestKnowledge(unittest.TestCase):
         regions = " ".join(pp.render_report(pp.derive(by_region())).split())
         self.assertIn("completion facts are up to", regions)
         self.assertNotIn("--confidence", regions)
-        sparse = " ".join(pp.render_report(pp.derive(pp.Scenario(
+        sparse = " ".join(pp.render_report(pp.derive(ten_thousand(
             archives="sparse"))).split())
         self.assertIn("keeps it fresh enough until 87% of the systems",
                       sparse)
-        none = " ".join(pp.render_report(pp.derive(pp.Scenario(
+        none = " ".join(pp.render_report(pp.derive(ten_thousand(
             archives="none"))).split())
         self.assertIn("so it is never that sure", none)
-        explain = pp.render_explain(pp.derive(pp.Scenario()))
+        explain = pp.render_explain(pp.derive(ten_thousand()))
         self.assertIn("u with u (1 + u) = tau x (probes - 1) / probes",
                       explain)
         self.assertIn("readings until 99% are done = ln(100) / 0.0554",
@@ -2562,17 +2652,17 @@ class TestKnowledge(unittest.TestCase):
         self.assertEqual(pp.share_done(0.87), "87%")
         for bad in (0.0, 1.0, -0.1, 1.5):
             with self.assertRaises(ValueError):
-                pp.derive(pp.Scenario(confidence=bad))
+                pp.derive(ten_thousand(confidence=bad))
         # Each of the two inputs is reported where it cannot matter.
         self.assertEqual(
             [item["input"] for item in pp.derive(by_region(
                 confidence=0.9))["unused_inputs"]], ["confidence"])
         self.assertEqual(
-            [item["input"] for item in pp.derive(pp.Scenario(
+            [item["input"] for item in pp.derive(ten_thousand(
                 neighbors=4))["unused_inputs"]], ["neighbors"])
         self.assertEqual(pp.derive(by_region(neighbors=4))["unused_inputs"],
                          [])
-        self.assertEqual(pp.derive(pp.Scenario(
+        self.assertEqual(pp.derive(ten_thousand(
             confidence=0.9))["unused_inputs"], [])
         args = pp.build_parser().parse_args(["--confidence", "0.9"])
         self.assertEqual(pp.scenario_from_args(args).confidence, 0.9)
@@ -2613,7 +2703,7 @@ class TestLeftOut(unittest.TestCase):
                                delta=0.002)
 
     def test_deep_time_figures_on_the_audited_inputs(self):
-        out = pp.derive(pp.Scenario(**TestIdentities.AUDITED))["left_out"]
+        out = pp.derive(ten_thousand(**TestIdentities.AUDITED))["left_out"]
         # 3.04 billion years; one turn at 7.5 kiloparsecs and 230
         # kilometers per second takes 200 million years.
         self.assertAlmostEqual(out["turn_years"] / 2.003e8, 1.0, delta=0.002)
@@ -2633,17 +2723,17 @@ class TestLeftOut(unittest.TestCase):
     def test_central_load_factor_of_the_exponential_disc(self):
         # Disc only: surface density at the center over the disc average,
         # xm^2 / (2 g(xm)); 17 for a scale length of 2.6 in a disc of 15.
-        r = pp.derive(pp.Scenario(bulge_fraction=0.0))
+        r = pp.derive(ten_thousand(bulge_fraction=0.0))
         xm = 15.0 / 2.6
         expected = xm * xm / (2 * (1 - math.exp(-xm) * (1 + xm)))
         self.assertAlmostEqual(r["left_out"]["central_load_factor"],
                                expected)
         self.assertAlmostEqual(expected, 17.0, delta=0.05)
-        with_bulge = pp.derive(pp.Scenario())["left_out"]
+        with_bulge = pp.derive(ten_thousand())["left_out"]
         self.assertGreater(with_bulge["central_load_factor"], expected)
 
     def test_scattering_stops(self):
-        r = pp.derive(pp.Scenario())
+        r = pp.derive(ten_thousand())
         out = r["left_out"]
         self.assertAlmostEqual(out["scattering_stops"],
                                r["phases"]["dispersal_years"] / 1e4)
@@ -2680,7 +2770,7 @@ class TestLossThreshold(unittest.TestCase):
     def test_threshold_solves_its_equation(self):
         for kwargs in [dict(), dict(speed_c=0.2), dict(systems=1e9),
                        dict(envelope_factor=300.0)]:
-            r = pp.derive(pp.Scenario(**kwargs))
+            r = pp.derive(ten_thousand(**kwargs))
             scattering = r["phases"]["dispersal_years"]
             survey = r["total_years"] - scattering
             rate = r["attrition"]["threshold_per_year"]
@@ -2696,7 +2786,7 @@ class TestLossThreshold(unittest.TestCase):
         # than systems the survey lasts about a thousand years while
         # scattering lasts millions, and exp(rate x scattering)
         # overflowed once scattering / survey passed 709.
-        r = pp.derive(pp.Scenario(probes=900_000_000, systems=2e6))
+        r = pp.derive(ten_thousand(probes=900_000_000, systems=2e6))
         scattering = r["phases"]["dispersal_years"]
         survey = r["total_years"] - scattering
         self.assertGreater(scattering / survey, 710)
@@ -2710,11 +2800,11 @@ class TestLossThreshold(unittest.TestCase):
 
     def test_threshold_separates_finishing_from_running_out(self):
         for kwargs in [dict(), dict(envelope_factor=300.0)]:
-            rate = pp.derive(pp.Scenario(**kwargs))["attrition"][
+            rate = pp.derive(ten_thousand(**kwargs))["attrition"][
                 "threshold_per_year"]
-            below = pp.derive(pp.Scenario(attrition_per_year=rate * 0.999,
+            below = pp.derive(ten_thousand(attrition_per_year=rate * 0.999,
                                           **kwargs))
-            above = pp.derive(pp.Scenario(attrition_per_year=rate * 1.001,
+            above = pp.derive(ten_thousand(attrition_per_year=rate * 1.001,
                                           **kwargs))
             self.assertFalse(below["fleet_exhausted"], kwargs)
             self.assertTrue(above["fleet_exhausted"], kwargs)
@@ -2725,38 +2815,38 @@ class TestLossThreshold(unittest.TestCase):
     def test_audited_figures(self):
         # 3.3e-10 per year, a mean life above 3 billion years; at 1e-9
         # the fleet finishes 33 percent.
-        base = pp.derive(pp.Scenario(**TestIdentities.AUDITED))
+        base = pp.derive(ten_thousand(**TestIdentities.AUDITED))
         self.assertAlmostEqual(
             base["attrition"]["threshold_per_year"] / 3.29e-10, 1.0,
             delta=0.005)
         self.assertAlmostEqual(
             base["attrition"]["mean_life_needed_years"] / 3.04e9, 1.0,
             delta=0.005)
-        lossy = pp.derive(pp.Scenario(attrition_per_year=1e-9,
+        lossy = pp.derive(ten_thousand(attrition_per_year=1e-9,
                                       **TestIdentities.AUDITED))
         self.assertAlmostEqual(lossy["attrition"]["completed_fraction"],
                                0.329, delta=0.001)
         # Twice the threshold: about half the survey.
-        twice = pp.derive(pp.Scenario(
+        twice = pp.derive(ten_thousand(
             attrition_per_year=2 * base["attrition"]["threshold_per_year"],
             **TestIdentities.AUDITED))
         self.assertAlmostEqual(twice["attrition"]["completed_fraction"], 0.5,
                                delta=0.001)
 
     def test_fleet_left_at_the_end(self):
-        r = pp.derive(pp.Scenario(attrition_per_year=2e-10))
+        r = pp.derive(ten_thousand(attrition_per_year=2e-10))
         self.assertAlmostEqual(r["attrition"]["fleet_left_at_end"],
                                math.exp(-2e-10 * r["total_years"]))
         self.assertEqual(
-            pp.derive(pp.Scenario())["attrition"]["fleet_left_at_end"], 1.0)
-        self.assertEqual(pp.derive(pp.Scenario(attrition_per_year=1e-7))
+            pp.derive(ten_thousand())["attrition"]["fleet_left_at_end"], 1.0)
+        self.assertEqual(pp.derive(ten_thousand(attrition_per_year=1e-7))
                          ["attrition"]["fleet_left_at_end"], 0.0)
 
     def test_every_report_prints_the_threshold(self):
         for kwargs in [dict(), dict(archives="none"),
                        dict(attrition_per_year=1e-10),
                        dict(attrition_per_year=1e-8)]:
-            r = pp.derive(pp.Scenario(**kwargs))
+            r = pp.derive(ten_thousand(**kwargs))
             text = " ".join(pp.render_report(r).split())
             self.assertIn("The survey can finish only if the loss rate "
                           "stays below %s per year"
@@ -2764,8 +2854,8 @@ class TestLossThreshold(unittest.TestCase):
                           text, kwargs)
             self.assertIn("Not modeled: records lost between deposits", text)
         self.assertIn("No probe is assumed to be lost", " ".join(
-            pp.render_report(pp.derive(pp.Scenario())).split()))
-        lossy = pp.derive(pp.Scenario(attrition_per_year=1e-8))
+            pp.render_report(pp.derive(ten_thousand())).split()))
+        lossy = pp.derive(ten_thousand(attrition_per_year=1e-8))
         self.assertIn(
             "the fleet runs out with %s of the survey done"
             % pp.percent(lossy["attrition"]["completed_fraction"]),
@@ -2782,7 +2872,7 @@ class TestPropellant(unittest.TestCase):
                                          (0.05, 0.03, 28.0),
                                          (0.2, 0.089, 89.5),
                                          (0.2, 0.03, 6.17e5)]:
-            r = pp.derive(pp.Scenario(speed_c=speed, exhaust_speed_c=exhaust))
+            r = pp.derive(ten_thousand(speed_c=speed, exhaust_speed_c=exhaust))
             ratio = r["propellant"]["mass_ratio_per_stop"]
             self.assertAlmostEqual(ratio, math.exp(2 * speed / exhaust))
             self.assertAlmostEqual(ratio / expected, 1.0, delta=0.005)
@@ -2792,29 +2882,29 @@ class TestPropellant(unittest.TestCase):
         # mass units of 931.494 MeV each; all of it as exhaust motion
         # gives sqrt(2 x energy / mass) of light speed.
         limit = math.sqrt(2 * 18.35 / (5.030 * 931.494))
-        self.assertAlmostEqual(pp.Scenario().exhaust_speed_c, limit,
+        self.assertAlmostEqual(ten_thousand().exhaust_speed_c, limit,
                                delta=0.0006)
         self.assertEqual(pp.REFERENCE_EXHAUST[0][0],
-                         pp.Scenario().exhaust_speed_c)
+                         ten_thousand().exhaust_speed_c)
 
     def test_velocity_change_adds_up_over_the_survey(self):
         # The audited fleet: 2e7 systems per probe at 0.05 of light
         # speed is two million times light speed per probe.
-        r = pp.derive(pp.Scenario(systems=2e11, speed_c=0.05))
+        r = pp.derive(ten_thousand(systems=2e11, speed_c=0.05))
         p = r["propellant"]
         self.assertAlmostEqual(p["velocity_change_per_stop_c"], 0.1)
         self.assertAlmostEqual(p["velocity_change_per_probe_c"], 2e6)
 
     def test_stay_is_unchanged_unless_refuelling_is_switched_on(self):
-        base = pp.derive(pp.Scenario())
-        other = pp.derive(pp.Scenario(exhaust_speed_c=0.03))
+        base = pp.derive(ten_thousand())
+        other = pp.derive(ten_thousand(exhaust_speed_c=0.03))
         self.assertEqual(other["total_years"], base["total_years"])
         self.assertEqual(base["propellant"]["refuel_years_per_stop"], 0.0)
         self.assertEqual(base["propellant"]["stay_years_per_system"], 10.0)
         self.assertEqual([item["input"] for item in other["unused_inputs"]],
                          ["exhaust_speed_c"])
         self.assertEqual(base["unused_inputs"], [])
-        used = pp.derive(pp.Scenario(exhaust_speed_c=0.03,
+        used = pp.derive(ten_thousand(exhaust_speed_c=0.03,
                                      refuel_years_per_mass=0.5))
         self.assertEqual(used["unused_inputs"], [])
 
@@ -2849,22 +2939,22 @@ class TestPropellant(unittest.TestCase):
         for kwargs in [dict(), dict(speed_c=0.2), dict(archives="none"),
                        dict(refuel_years_per_mass=1.0)]:
             text = " ".join(pp.render_report(
-                pp.derive(pp.Scenario(**kwargs))).split())
+                pp.derive(ten_thousand(**kwargs))).split())
             self.assertIn("times its empty mass at an exhaust speed of "
                           "0.089 c", text, kwargs)
             self.assertIn("the class of the 1978 fusion-probe study", text)
         fast = " ".join(pp.render_report(
-            pp.derive(pp.Scenario(speed_c=0.2))).split())
+            pp.derive(ten_thousand(speed_c=0.2))).split())
         self.assertIn("90 times its empty mass", fast)
         self.assertIn("a faster cruise is therefore optimistic", fast)
         self.assertNotIn("--refuel-\n", pp.render_report(
-            pp.derive(pp.Scenario(speed_c=0.2))))
+            pp.derive(ten_thousand(speed_c=0.2))))
 
     def test_bad_propellant_inputs_rejected(self):
         for bad in [dict(exhaust_speed_c=0), dict(exhaust_speed_c=1.0),
                     dict(refuel_years_per_mass=-1)]:
             with self.assertRaises(ValueError, msg=bad):
-                pp.derive(pp.Scenario(**bad))
+                pp.derive(ten_thousand(**bad))
 
 
 class TestScattering(unittest.TestCase):
@@ -2873,7 +2963,7 @@ class TestScattering(unittest.TestCase):
 
     def test_default_allowance_is_the_disc_diameter(self):
         for kwargs in [dict(), dict(disc_radius_kpc=20.0, speed_c=0.05)]:
-            sc = pp.Scenario(**kwargs)
+            sc = ten_thousand(**kwargs)
             r = pp.derive(sc)
             diameter_m = 2 * sc.disc_radius_kpc * pp.KPC_M
             self.assertAlmostEqual(
@@ -2884,20 +2974,20 @@ class TestScattering(unittest.TestCase):
             self.assertEqual(r["distance"]["dispersal_m"], diameter_m)
         # 30 kiloparsecs at 0.1 of light speed: 978 thousand years.
         self.assertAlmostEqual(
-            pp.derive(pp.Scenario())["phases"]["dispersal_years"] / 9.785e5,
+            pp.derive(ten_thousand())["phases"]["dispersal_years"] / 9.785e5,
             1.0, places=3)
 
     def test_it_covers_the_longest_leg_from_any_starting_radius(self):
         # From a start at radius r the farthest seed is at radius + r on
         # the far side. Sample starts across the disc, rim included.
-        sc = pp.Scenario()
+        sc = ten_thousand()
         allowance = pp.derive(sc)["dispersal"]["allowance_kpc"]
         for step in range(0, 101):
             start = sc.disc_radius_kpc * step / 100.0
             self.assertLessEqual(sc.disc_radius_kpc + start, allowance)
         # The old default (mean leg 10, margin 1.5) covered only a start
         # at the exact center.
-        old = pp.derive(pp.Scenario(dispersal_leg_kpc=10.0,
+        old = pp.derive(ten_thousand(dispersal_leg_kpc=10.0,
                                     envelope_factor=1.5))
         self.assertAlmostEqual(old["dispersal"]["allowance_kpc"], 15.0)
         self.assertFalse(old["dispersal"]["covers_any_start"])
@@ -2907,22 +2997,22 @@ class TestScattering(unittest.TestCase):
                          " ".join(pp.render_report(pp.derive(sc)).split()))
 
     def test_explicit_leg_and_margin_keep_working(self):
-        r = pp.derive(pp.Scenario(dispersal_leg_kpc=10.0,
+        r = pp.derive(ten_thousand(dispersal_leg_kpc=10.0,
                                   envelope_factor=1.5, speed_c=0.05))
         # The figure the audit reproduced: 978 thousand years.
         self.assertAlmostEqual(r["phases"]["dispersal_years"] / 9.785e5, 1.0,
                                places=3)
-        wide = pp.derive(pp.Scenario(envelope_factor=2.0))
+        wide = pp.derive(ten_thousand(envelope_factor=2.0))
         self.assertAlmostEqual(
             wide["phases"]["dispersal_years"],
-            2 * pp.derive(pp.Scenario())["phases"]["dispersal_years"])
+            2 * pp.derive(ten_thousand())["phases"]["dispersal_years"])
 
 
 class TestStaleness(unittest.TestCase):
     """Audit A5: every input either changes the result or is reported."""
 
     def test_delays_add_one_after_another(self):
-        r = pp.derive(pp.Scenario())
+        r = pp.derive(ten_thousand())
         parts = r["staleness_parts_years"]
         self.assertAlmostEqual(sum(parts.values()), r["staleness_years"])
         self.assertAlmostEqual(parts["deposit_interval"],
@@ -2935,7 +3025,7 @@ class TestStaleness(unittest.TestCase):
     def test_consolidation_cadence_matters_everywhere(self):
         # It used to change nothing between 100 and 150,000 years.
         cadences = [100.0, 1e3, 1e4, 1e5, 1.5e5, 1e6]
-        runs = [pp.derive(pp.Scenario(consolidation_years=c))
+        runs = [pp.derive(ten_thousand(consolidation_years=c))
                 for c in cadences]
         for (c0, r0), (c1, r1) in zip(zip(cadences, runs),
                                       zip(cadences[1:], runs[1:])):
@@ -2950,9 +3040,9 @@ class TestStaleness(unittest.TestCase):
         # It used to be read only by the layout without stations.
         extra = 49.5 * pp.KPC_M / pp.C_M_PER_S / pp.YEAR_S
         for name in ("full-network", "stations-only", "sparse"):
-            near = pp.derive(pp.Scenario(archives=name,
+            near = pp.derive(ten_thousand(archives=name,
                                          cache_spacing_kpc=0.5))
-            far = pp.derive(pp.Scenario(archives=name,
+            far = pp.derive(ten_thousand(archives=name,
                                         cache_spacing_kpc=50.0))
             self.assertAlmostEqual(
                 far["staleness_years"] - near["staleness_years"], extra,
@@ -2960,8 +3050,8 @@ class TestStaleness(unittest.TestCase):
             self.assertGreater(far["total_years"], near["total_years"], name)
 
     def test_inputs_that_cannot_matter_are_reported(self):
-        self.assertEqual(pp.derive(pp.Scenario())["unused_inputs"], [])
-        r = pp.derive(pp.Scenario(archives="none", cache_spacing_kpc=5.0,
+        self.assertEqual(pp.derive(ten_thousand())["unused_inputs"], [])
+        r = pp.derive(ten_thousand(archives="none", cache_spacing_kpc=5.0,
                                   consolidation_years=500.0,
                                   deposit_every=3, bitrate_bps=1.0))
         self.assertEqual(
@@ -2973,12 +3063,12 @@ class TestStaleness(unittest.TestCase):
         for flag in ("--cache-spacing", "--consolidation-years",
                      "--deposit-every", "--bitrate"):
             self.assertIn(flag, report)
-        r = pp.derive(pp.Scenario(archives="route-boxes-only",
+        r = pp.derive(ten_thousand(archives="route-boxes-only",
                                   consolidation_years=500.0))
         self.assertEqual([item["input"] for item in r["unused_inputs"]],
                          ["consolidation_years"])
         self.assertNotIn("Inputs given but not used",
-                         pp.render_report(pp.derive(pp.Scenario())))
+                         pp.render_report(pp.derive(ten_thousand())))
 
 
 class TestInputValidation(unittest.TestCase):
@@ -3001,7 +3091,7 @@ class TestInputValidation(unittest.TestCase):
         self.assert_rejected(["--deposit-every", "0"], "deposit_every")
         self.assert_rejected(["--deposit-every", "-2"], "deposit_every")
         with self.assertRaises(ValueError):
-            pp.derive(pp.Scenario(deposit_every=0))
+            pp.derive(ten_thousand(deposit_every=0))
 
     def test_station_count_below_one_rejected(self):
         # Zero used to end in an uncaught ZeroDivisionError, a negative
@@ -3016,16 +3106,16 @@ class TestInputValidation(unittest.TestCase):
                     dict(detour_kpc=-0.5), dict(dwell_years=-1),
                     dict(attrition_per_year=-1e-9)]:
             with self.assertRaises(ValueError, msg=bad):
-                pp.derive(pp.Scenario(**bad))
+                pp.derive(ten_thousand(**bad))
         self.assert_rejected(["--dup-gain", "-5"], "dup_gain")
 
     def test_zero_is_accepted_where_it_has_a_meaning(self):
         for fine in [dict(dup_gain=0), dict(dup_cap=0), dict(neighbors=0),
                      dict(detour_kpc=0), dict(dwell_years=0)]:
-            r = pp.derive(pp.Scenario(**fine))
+            r = pp.derive(ten_thousand(**fine))
             self.assertGreater(r["total_years"], 0, fine)
         self.assertEqual(
-            pp.derive(pp.Scenario(dup_gain=0))["duplication_fraction"], 0)
+            pp.derive(ten_thousand(dup_gain=0))["duplication_fraction"], 0)
 
     def test_values_that_are_not_finite_numbers_rejected(self):
         for flag in ["--speed", "--dwell", "--systems", "--dup-gain"]:
@@ -3038,12 +3128,12 @@ class TestInputValidation(unittest.TestCase):
                     dict(probes=10.5), dict(speed_c=None),
                     dict(archives=["full-network"])]:
             with self.assertRaises(ValueError, msg=bad):
-                pp.derive(pp.Scenario(**bad))
+                pp.derive(ten_thousand(**bad))
 
     def test_whole_number_written_as_float_accepted(self):
-        self.assertEqual(pp.Scenario(probes=10000.0).probes, 10000)
-        self.assertEqual(pp.derive(pp.Scenario(probes=10000.0))["total_years"],
-                         pp.derive(pp.Scenario())["total_years"])
+        self.assertEqual(ten_thousand(probes=10000.0).probes, 10000)
+        self.assertEqual(pp.derive(ten_thousand(probes=10000.0))["total_years"],
+                         pp.derive(ten_thousand())["total_years"])
 
     def test_scenario_file_must_hold_an_object(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -3092,15 +3182,20 @@ class TestCommandLine(unittest.TestCase):
     def test_scale_estimate_is_stated_at_the_headline(self):
         # Audit A8: the warning used to sit only under "Caveats", far
         # below a headline thirty times past its limit.
-        code, out = self.run_main([])
+        code, out = self.run_main(["--probes", "10000"])
         lines = out.splitlines()
         at = next(i for i, line in enumerate(lines) if "HEADLINE" in line)
         block = lines[at:lines.index("", at)]     # up to the blank line
         self.assertIn("scale estimate", " ".join(block))
         self.assertLess(at + len(block), lines.index("Phase breakdown"))
-        self.assertTrue(pp.derive(pp.Scenario())["scale_estimate"])
+        self.assertTrue(pp.derive(ten_thousand())["scale_estimate"])
+        # A billion probes finish within a million years, where the galaxy
+        # has hardly turned: no such warning.
+        code, out = self.run_main([])
+        self.assertNotIn("scale estimate", out)
+        self.assertFalse(pp.derive(pp.Scenario())["scale_estimate"])
         # A survey shorter than the limit carries no such label.
-        short = pp.derive(pp.Scenario(systems=1e8))
+        short = pp.derive(ten_thousand(systems=1e8))
         self.assertLess(short["total_years"], pp.SCALE_ESTIMATE_YEARS)
         self.assertFalse(short["scale_estimate"])
         self.assertNotIn("scale estimate only", pp.render_report(short))
@@ -3148,7 +3243,7 @@ class TestCommandLine(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             out_path = os.path.join(tmp, "out.json")
             code, _ = self.run_main(
-                ["--attrition", "1e-8", "--json", out_path])
+                ["--attrition", "1e-4", "--json", out_path])
             self.assertEqual(code, 0)
             with open(out_path, encoding="utf-8") as fh:
                 text = fh.read()
@@ -3162,7 +3257,7 @@ class TestCommandLine(unittest.TestCase):
         self.assertIsNone(result["milestones"][-1]["years"])
 
     def test_json_safe_leaves_finite_results_untouched(self):
-        result = pp.derive(pp.Scenario())
+        result = pp.derive(ten_thousand())
         self.assertFalse(result["fleet_exhausted"])
         self.assertEqual(pp.json_safe(result), result)
 
