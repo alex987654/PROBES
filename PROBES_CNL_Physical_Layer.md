@@ -2,7 +2,7 @@
 
 ## Version 1.0.0
 
-*How ten thousand probes can physically exchange PROBES CNL
+*How a billion probes can physically exchange PROBES CNL
 messages across a galaxy, what that architecture demands of the
 language, and which demands were considered and rejected. All
 technology anchors are flown systems or historically discussed
@@ -17,12 +17,13 @@ companion `PROBES_CNL_Transport_Layer.md`.*
 
 | Quantity | Value | Consequence |
 |---|---|---|
-| Survey disc radius | ≈ 15 kiloparsecs (kpc) ≈ 4.6×10²⁰ m | — |
-| Probes | 10⁴ | mean area per probe ≈ 0.07 kpc² |
-| Mean neighbor spacing s | ~0.27 kpc ≈ 8×10¹⁸ m | light travel time per spacing T_e ≈ 880 years |
-| Probe cruise speed (studied concepts, 0.05–0.1 c) | nominal 0.05 c | probe transit per spacing T_t ≈ 1.8×10⁴ years |
-| Consolidation cadence T_c | ~10⁴ years (≈ one probe transit) | archives supersede gossip on this clock |
-| Fleet-crossing light time | ~10⁵ years | — |
+| Survey disc radius | ≈ 15 kiloparsecs (kpc) ≈ 4.6×10²⁰ m | crossing the disc takes ≈ 10⁶ years at nominal speed |
+| Probes | 10⁹ | ≈ 100 star systems and ≈ 500 cubic parsecs per probe; the fleet fills the disc, ≈ 90 probes deep |
+| Mean neighbor spacing s | ≈ 8 parsecs (pc) ≈ 2.4×10¹⁷ m | light travel time per spacing T_e ≈ 26 years |
+| Probe cruise speed (studied concepts, 0.05–0.2 c) | nominal 0.1 c | probe transit per spacing T_t ≈ 260 years |
+| Survey after activation | ≈ 10⁴ years | a star moves < 1 pc meanwhile: the field stands still |
+| Consolidation cadence T_c | ~10⁴ years (≈ the survey itself) | archives record the survey; they do not steer it |
+| Fleet-crossing light time | ~10⁵ years | no fact reaches the whole fleet while the survey lasts |
 
 **The controlling fact: every exchange is a monologue.** With
 century-scale one-way latency, there are no handshakes, no

@@ -18,7 +18,7 @@ Version 1.0.0
 
 ## 1. Scenario and Purpose
 
-Ten thousand autonomous probes travel a galaxy to survey its
+A billion autonomous probes travel a galaxy to survey its
 stars, planets, and interstellar medium. Probes exchange messages
 in a controlled natural language directly, through relay chains,
 and through physical caches left at fixed sites.
