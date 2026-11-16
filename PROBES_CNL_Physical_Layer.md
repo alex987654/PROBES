@@ -87,7 +87,8 @@ Two conclusions fall straight out:
    relative velocities to ≈ 30 m/s — a `CAT-CCH` entry, refined
    at every consolidation cycle. A probe's beam is six times as
    wide and needs the velocity of the star at which its
-   neighbor stops to ≈ 180 m/s — a `CAT-TGT` entry (CONS-4).
+   neighbor stops to ≈ 180 m/s — a `CAT-TGT` entry (CONS-4,
+   Grammar §5.4a).
 2. **The wire form is not an optimization; it is the channel's
    admission ticket.** At bits per second, a 500-byte PROBES-W
    survey message costs about an hour of link time; the same
@@ -601,6 +602,7 @@ free of covert channels.
 | Sender internal state inexpressible | Grammar SELF-1 (§5.4a) | §6.4 |
 | Cache-maintenance, galactic-structure, and stellar-activity vocabulary; numeric-only stellar characterization | Lexicon §5.1, §5.3, §5.5 | §3.3, §6.4 |
 | Epoch-free structural catalogues and coverage aggregates; corroboration counts; manifest horizon | Grammar ORG-3, CONS-1, CONS-2; custodial rule MAN-H | §4.4, §4.5 |
+| Coverage kept by system; target entries that let a later probe recognize a system and aim a beam at it | Grammar CONS-3, CONS-4 | §2.2, §4.2 |
 | Transport uniformity and quarantine discipline | Transport TR-1 … TR-5 | §7 |
 | Dispersal doctrine `PROC-DSP` (DSP-1…DSP-3, activation epoch) and `PROC-RCH`, `THR-NRG-*` | catalogue content, zero grammar | §4.5, §6.4 |
 
