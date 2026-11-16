@@ -429,9 +429,14 @@ fusion-probe study proposed helium-3 aerostat mining at a giant
 planet, and deuterium is ubiquitous (the fleet measures
 deuterium-to-hydrogen ratios as ordinary survey products — corpus C-28). Icy bodies
 and giant-planet atmospheres are therefore both science targets
-and fuel depots. The open engineering risk, flagged honestly:
-in-situ isotope separation at probe scale is the least-anchored
-element of the whole architecture. Within star systems,
+and fuel depots. The demand is set by the speed: every stop
+costs a velocity change of twice the cruise speed, so at 0.1 c
+a probe leaves each system with ≈ 9.5 times its empty mass even
+at an exhaust speed of 0.089 c, the ideal limit for fusion of
+deuterium and helium-3. The open engineering risk, flagged
+honestly: in-situ isotope separation at probe scale is the
+least-anchored element of the whole architecture. Within star
+systems,
 photovoltaic/thermal power is trivial by comparison (~1.4 kW/m²
 at Sun-like flux distances).
 
