@@ -238,11 +238,12 @@ Both compaction and validation apply these before digesting:
 ## 7. Digest
 
 `DG` = lowercase hex SHA-256 over the full canonical wire
-message with the `DG` value replaced by 64 `0` characters.
-`MG` = the first 16 hex digits of `DG`, uppercase. A relay
-verifies `DG` before retransmission and cites `MG` in E-RLY
-tags; `messages_cited:` carries the full digest so receivers
-can verify ends-to-end without holding the original.
+message with the `MG` value replaced by 16 `0` characters and
+the `DG` value replaced by 64 `0` characters. `MG` = the first
+16 hex digits of `DG`, uppercase. A relay verifies `DG` before
+retransmission and cites `MG` in E-RLY tags; `messages_cited:`
+carries the full digest so receivers can verify ends-to-end
+without holding the original.
 
 **Transport layering.** Forward error correction,
 erasure coding, and framing sit strictly below the canonical
