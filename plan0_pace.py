@@ -47,14 +47,15 @@ DEFAULT_SYSTEMS = 1.0e11
 
 GALAXY_MODELS = ("exponential", "uniform")
 
-# Ways to run the survey. "regions" is the specification as it stands; the
-# others change how the fleet moves or what it records. The plan, and the
-# default, is "systems". ("systems-midplane" needs a survey of several
-# hundred million years and so a far smaller fleet.)
+# Ways to run the survey. "systems" is the specification (README section
+# 3.2) and the default: completion is recorded by system. "regions"
+# records it by region; the others change how the fleet moves.
+# ("systems-midplane" needs a survey of several hundred million years and
+# so a far smaller fleet.)
 STRATEGIES = {
-    "regions": ("as the specification stands: the fleet spreads over the "
-                "disc and each probe surveys one region after another; "
-                "completion is recorded by region"),
+    "regions": ("the fleet spreads over the disc and each probe surveys "
+                "one region after another; completion is recorded by "
+                "region"),
     "sweep-line": ("the fleet works along a line held from the galactic "
                    "center to the rim while the disc turns past it; a "
                    "system is surveyed when it crosses the line"),
@@ -390,10 +391,10 @@ def fleet_geometry(sc: Scenario) -> dict:
     (the quantities of the regime table, Physical Layer section 1)."""
     area_kpc2 = math.pi * sc.disc_radius_kpc ** 2 / sc.probes
     layer_kpc = math.sqrt(area_kpc2)            # one probe per square cell
-    # That table lays the fleet out in one layer. Probes that would then
-    # lie closer together than the disc is thick do not fit in one layer:
-    # they fill the disc, several above one another, each in the middle
-    # of a cube of its own.
+    # Probes that would lie closer together in one layer than the disc is
+    # thick do not fit in one layer: they fill the disc, several above one
+    # another, each in the middle of a cube of its own. That table counts
+    # its billion probes this way.
     stacked = layer_kpc < sc.disc_thickness_kpc
     spacing_kpc = ((area_kpc2 * sc.disc_thickness_kpc) ** (1.0 / 3.0)
                    if stacked else layer_kpc)
@@ -478,12 +479,11 @@ def resolve_layout(sc: Scenario) -> dict:
 
 INPUT_TABLE = [
     ("probes", None, None, None, False,
-     "the plan: a billion probes, a hundred systems each. Physical Layer "
-     "section 1 names ten thousand: --probes 10000"),
+     "Physical Layer section 1: a billion probes, a hundred systems each"),
     ("speed_c", 0.1, 0.2, "log", True,
-     "the plan: at least 0.1 of light speed, up to the fastest of the "
-     "studied probe concepts (Physical Layer section 5). Physical Layer "
-     "section 1 names 0.05 as nominal: --speed 0.05"),
+     "Physical Layer section 1 names 0.1 of light speed as nominal; the "
+     "range runs up to the fastest of the studied probe concepts "
+     "(Physical Layer section 5)"),
     ("systems", 5e10, 1.2e11, "log", True,
      "stellar mass of the galaxy, 2.6e10 to 6.1e10 solar masses (Lian and "
      "others 2025; Licquia and Newman 2015), over 0.54 solar masses per "
@@ -528,7 +528,9 @@ INPUT_TABLE = [
     ("refuel_years_per_mass", None, None, None, False,
      "not modeled unless given; no study fixes a harvesting rate"),
     ("region_systems", None, None, None, False,
-     "assumption; the specification fixes no region size"),
+     "assumption for fleets whose probes each survey many regions; "
+     "Physical Layer section 4.5 gives every probe one region, its "
+     "whole share, and a smaller share is treated as the region"),
     ("dispersal_leg_kpc", None, None, None, False,
      "the disc diameter unless given: the longest leg possible from any "
      "starting point, so the wait does not depend on where the fleet "
@@ -542,9 +544,7 @@ INPUT_TABLE = [
     ("archives", None, None, None, False,
      "the doctrine layout (Physical Layer section 3)"),
     ("strategy", None, None, None, False,
-     "the plan: completion recorded by system. The specification as it "
-     "stands records completion by region (README section 3.2): "
-     "--strategy regions"),
+     "completion recorded by system (README section 3.2)"),
     ("cache_spacing_kpc", None, None, None, False,
      "set by the archive layout"),
     ("detour_kpc", None, None, None, False,
@@ -564,8 +564,8 @@ INPUT_TABLE = [
     ("neighbors", None, None, None, False,
      "Physical Layer section 4.3"),
     ("confidence", None, None, None, False,
-     "the plan: a probe works out what the others do from the common rule "
-     "and relies on that while it is right 95 times in 100"),
+     "README section 3.2: a probe works out what the others do from the "
+     "common rule and relies on that while it is right 95 times in 100"),
 ]
 
 DEFAULT_DRAWS = 2000
@@ -1473,7 +1473,7 @@ def share_leaving_cube(x: float) -> float:
 # any galaxy-sized survey it equals 1.
 #
 # Nothing here lets a probe recognize a system that was surveyed in
-# another region; the specification records completion by region only.
+# another region: this is the law for completion recorded by region.
 
 
 def share_seen(changes_per_pass: float, passes: float = 1.0,
@@ -2875,9 +2875,8 @@ def describe_reached(r: dict, canonical: bool = False) -> list:
                 "systems-midplane) brings the first half of the systems "
                 "sooner and the rest no sooner.")
         lines += fill(
-            "The specification records completion by region. This needs a "
-            "record per system, compact enough to tell it apart from every "
-            "other, %s."
+            "Recording by system needs a record per system, compact enough "
+            "to tell it apart from every other, %s."
             % ("that every archive station holds" if mixing["share"] >= 0.5
                else "within reach of the probes around it"))
         return lines
@@ -2904,7 +2903,7 @@ def describe_reached(r: dict, canonical: bool = False) -> list:
         if not whole:
             text += (
                 " The bulge does not turn in step; it is surveyed by "
-                "regions, as in the specification. Together one sweep "
+                "regions. Together one sweep "
                 "reaches %s of all systems, and %s of its visits go to "
                 "systems already seen."
                 % (percent(seen), percent(reached["repeat_visit_share"])))
@@ -2947,9 +2946,9 @@ def describe_reached(r: dict, canonical: bool = False) -> list:
     lines += _reached_table(reached, canonical)
     lines += fill(
         "A further pass needs the completion records of the one before to "
-        "lapse. As the specification stands a finished region stays "
-        "finished, and the fleet stops after one pass. Nothing lets a probe "
-        "recognize a system that was surveyed in another region.")
+        "lapse. Without that a finished region stays finished, and the "
+        "fleet stops after one pass. Nothing lets a probe recognize a "
+        "system that was surveyed in another region.")
     return lines
 
 
@@ -3069,10 +3068,10 @@ def describe_left_out(r: dict, canonical: bool = False) -> list:
             "where systems lie far apart, would lag: 99%% of the systems "
             "would be done %s into the survey and 99.9%% after %s, against "
             "%s and %s. The starting points are taken as drawn at random, "
-            "which is what a rule keyed on a random identifier gives. "
-            "Spread evenly, one probe to a region of its own, a probe "
-            "would need to know nothing of the others, and 99%% of the "
-            "systems would be done %s into the survey (simulated)."
+            "the less favorable case. Physical Layer 4.5 spreads them "
+            "evenly, one probe to a region of its own: a probe then needs "
+            "to know nothing of the others, and 99%% of the systems would "
+            "be done %s into the survey (simulated)."
             % (fmt_duration(equal["0.99"], canonical),
                fmt_duration(equal["0.999"], canonical),
                fmt_duration(levels["0.99"], canonical),
@@ -3531,8 +3530,8 @@ def render_report(r: dict, canonical: bool = False) -> str:
         % fmt_kiloparsecs(g["spacing_kpc"], canonical))
     if g["stacked"]:
         for line in fill(
-                "(the probes fill the disc, %s deep; laid out in one layer, "
-                "as that section counts, they would lie %s apart)"
+                "(the probes fill the disc, %s deep; laid out in one layer "
+                "they would lie %s apart)"
                 % (sig(g["layers"], 2),
                    fmt_kiloparsecs(g["layer_spacing_kpc"], canonical)),
                 indent=" " * 29):
@@ -3943,9 +3942,9 @@ The report also says how sure the answer is, what every stop costs in
 propellant, how many probes the survey can afford to lose, and which
 effects the estimate leaves out, each with its size.
 
-By default the fleet records which systems are done one by one. The
-documents record completion by region; --strategy regions gives the
-estimate for that. With the default fleet every probe has only a hundred
+By default the fleet records which systems are done one by one, as the
+documents have it; --strategy regions gives the estimate for recording
+by region. With the default fleet every probe has only a hundred
 systems, and the stars hardly move while it surveys them; the figures
 for the survey phase then come from a simulation that follows single
 probes, plan0_sim.py in this folder.
@@ -3999,7 +3998,7 @@ examples:
   python plan0_pace.py --uncertainty
       add the interval that the plausible input ranges give
   python plan0_pace.py --strategy regions
-      the specification as it stands; every report compares all the ways
+      completion recorded by region; every report compares all the ways
       of running the survey
   python plan0_pace.py --scenario my.json --json out.json
       load assumptions from a file, write full results to a file
@@ -4127,8 +4126,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     g.add_argument("--strategy", choices=list(STRATEGIES), metavar="NAME",
                    help="way of running the survey; see the list below "
-                        "(default systems; regions is the "
-                        "specification as it stands)")
+                        "(default systems, as the specification has it)")
 
     g = p.add_argument_group("archives and communication")
     g.add_argument("--archives", choices=sorted(ARCHIVE_PRESETS),

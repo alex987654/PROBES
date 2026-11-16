@@ -23,20 +23,20 @@ DENYLIST_SUBSTRINGS = ["T_c", "h_max", "PROC-", "CAT-", "CCH-", "e.g."]
 
 
 def ten_thousand(**inputs):
-    """The fleet of Physical Layer section 1: ten thousand probes, here
-    with the rule of waiting at the mid-plane, which suits a survey of
-    hundreds of millions of years. The laws for stars that mix while the
-    survey lasts were worked out for this fleet and stay pinned on it,
-    whatever the defaults of the calculator become."""
+    """A fleet of ten thousand probes, here with the rule of waiting at
+    the mid-plane, which suits a survey of hundreds of millions of years.
+    The laws for stars that mix while the survey lasts were worked out for
+    this fleet and stay pinned on it, whatever the defaults of the
+    calculator become."""
     inputs.setdefault("probes", 10_000)
     inputs.setdefault("strategy", "systems-midplane")
     return pp.Scenario(**inputs)
 
 
 def by_region(**inputs):
-    """That fleet as the specification stands, completion recorded by
-    region. The identities of the travel model are pinned on it: a hop of
-    one length, work in step with the systems visited."""
+    """That fleet with completion recorded by region. The identities of
+    the travel model are pinned on it: a hop of one length, work in step
+    with the systems visited."""
     return ten_thousand(strategy="regions", **inputs)
 
 
@@ -101,26 +101,31 @@ class TestModel(unittest.TestCase):
                                places=3)
         self.assertGreater(r["phases"]["dispersal_years"]
                            / r["total_years"], 0.95)
-        # The fleet of Physical Layer section 1, ten thousand probes: 0.75
-        # billion years at the same speed, 1.40 at the 0.05 named there.
+        # A fleet of ten thousand probes: 0.75 billion years at the same
+        # speed, 1.40 at 0.05 of light speed.
         old = pp.derive(ten_thousand())
         self.assertEqual(old["strategy"], "systems-midplane")
         self.assertAlmostEqual(old["total_years"] / 0.752e9, 1.0, delta=0.005)
         slow = pp.derive(ten_thousand(speed_c=0.05))
         self.assertAlmostEqual(slow["total_years"] / 1.404e9, 1.0,
                                delta=0.005)
-        # The specification as it stands, for that fleet: one pass by
+        # That fleet with completion recorded by region: one pass by
         # regions.
         by_region = pp.derive(ten_thousand(strategy="regions"))
         self.assertGreater(by_region["total_years"], 0.5e9)
         self.assertLess(by_region["total_years"], 0.75e9)
 
     def test_regime_table_cross_checks(self):
-        # Physical Layer section 1: 0.27 kiloparsecs at 0.05 c takes about
-        # 1.8e4 years; a 500-byte message takes about an hour at 1 bit/s.
-        v = 0.05 * pp.C_M_PER_S
-        transit_years = 0.27 * pp.KPC_M / v / pp.YEAR_S
-        self.assertAlmostEqual(transit_years / 1.8e4, 1.0, delta=0.03)
+        # Physical Layer section 1: 8 parsecs, 2.4e17 meters, take light
+        # about 26 years and a probe at 0.1 c about 260; the disc, 30
+        # kiloparsecs across, takes a probe about 1e6 years. Section 2.2:
+        # a 500-byte message takes about an hour at 1 bit/s.
+        self.assertAlmostEqual(0.008 * pp.KPC_M / 2.4e17, 1.0, delta=0.03)
+        light_years = 0.008 * pp.KPC_M / pp.LIGHT_YEAR_M
+        self.assertAlmostEqual(light_years / 26, 1.0, delta=0.01)
+        self.assertAlmostEqual(light_years / 0.1 / 260, 1.0, delta=0.01)
+        crossing_years = 30.0 * pp.KPC_M / pp.LIGHT_YEAR_M / 0.1
+        self.assertAlmostEqual(crossing_years / 1e6, 1.0, delta=0.03)
         self.assertAlmostEqual(500 * 8 / 1.0 / 3600, 1.11, delta=0.01)
 
     def test_phases_sum_to_total(self):
@@ -963,12 +968,11 @@ class TestGalaxyModel(unittest.TestCase):
 class TestFleetGeometry(unittest.TestCase):
     """Audit A6: the regime figures are computed, not fixed text."""
 
-    def test_default_fleet_matches_the_regime_table(self):
-        # Physical Layer section 1: about 0.07 square kiloparsecs per
-        # probe, 0.27 kiloparsecs spacing, 880 years of light time,
-        # 1.8e4 years of probe transit at its nominal 0.05 of light
-        # speed, 1e5 years to cross the fleet. That table lays the ten
-        # thousand probes out in one layer.
+    def test_ten_thousand_probes(self):
+        # Ten thousand probes at 0.05 of light speed, counted in one
+        # layer: about 0.07 square kiloparsecs per probe, 0.27
+        # kiloparsecs spacing, 880 years of light time, 1.8e4 years of
+        # probe transit, 1e5 years of light time to cross the fleet.
         g = pp.derive(ten_thousand(speed_c=0.05))["geometry"]
         self.assertAlmostEqual(g["area_per_probe_kpc2"], 0.07, delta=0.001)
         self.assertAlmostEqual(g["layer_spacing_kpc"], 0.27, delta=0.005)
@@ -990,12 +994,31 @@ class TestFleetGeometry(unittest.TestCase):
         self.assertAlmostEqual(g["transit_years_per_spacing"] / 2.39e4, 1.0,
                                delta=0.01)
 
-    def test_a_billion_probes(self):
-        # The plan: each probe has a cube 7.9 parsecs wide, 26 years of
-        # light time and 260 years of travel from the next one. Counted
-        # in one layer they would lie 0.84 parsecs apart, closer than the
-        # stars.
-        g = pp.derive(pp.Scenario())["geometry"]
+    def test_default_fleet_matches_the_regime_table(self):
+        # Physical Layer section 1: a billion probes, each with about a
+        # hundred star systems and 500 cubic parsecs, a cube 7.9 parsecs
+        # wide; 26 years of light time and 260 years of travel from the
+        # next one at the nominal 0.1 of light speed; the fleet fills the
+        # disc about 90 deep; light needs about 1e5 years to cross it and
+        # a probe about 1e6. Counted in one layer the probes would lie
+        # 0.84 parsecs apart, closer than the stars.
+        sc = pp.Scenario()
+        r = pp.derive(sc)
+        g = r["geometry"]
+        self.assertEqual(sc.probes, 10 ** 9)
+        self.assertEqual(sc.speed_c, 0.1)
+        self.assertEqual(sc.disc_radius_kpc, 15.0)
+        self.assertEqual(sc.consolidation_years, 10_000.0)
+        self.assertAlmostEqual(r["visited_per_probe"], 100.0)
+        self.assertAlmostEqual((g["spacing_kpc"] * 1000) ** 3 / 500, 1.0,
+                               delta=0.02)
+        self.assertAlmostEqual(g["crossing_light_years"] / 1e5, 1.0,
+                               delta=0.03)
+        self.assertAlmostEqual(r["phases"]["dispersal_years"] / 1e6, 1.0,
+                               delta=0.03)
+        # The survey after activation: about ten thousand years.
+        after = r["total_years"] - r["phases"]["dispersal_years"]
+        self.assertAlmostEqual(after / 1e4, 1.0, delta=0.1)
         self.assertTrue(g["stacked"])
         self.assertAlmostEqual(g["spacing_kpc"] * 1000, 7.91, delta=0.01)
         self.assertAlmostEqual(g["layer_spacing_kpc"] * 1000, 0.841,
@@ -1014,7 +1037,7 @@ class TestFleetGeometry(unittest.TestCase):
         self.assertIn("they would lie 0.841 parsecs apart", text)
 
     def test_identities(self):
-        # Few probes: one layer, as in the regime table.
+        # Few probes: one layer.
         sc = ten_thousand(probes=250, disc_radius_kpc=12.0, speed_c=0.08)
         g = pp.derive(sc)["geometry"]
         self.assertFalse(g["stacked"])
@@ -1084,7 +1107,7 @@ class TestFleetGeometry(unittest.TestCase):
         self.assertAlmostEqual(g["cadence_in_transits"], 0.84, delta=0.01)
         self.assertEqual(g["useful_relay_hops"], [1, 2])
         self.assertEqual(g["spec_hop_limit"], 2)
-        # At the nominal speed of Physical Layer section 1 one hop does.
+        # At 0.05 of light speed one hop does.
         slow = pp.derive(ten_thousand(speed_c=0.05))["geometry"]
         self.assertEqual(slow["useful_relay_hops"], [1, 1])
         slow_cycle = pp.derive(ten_thousand(
@@ -1652,10 +1675,10 @@ class TestStrategies(unittest.TestCase):
     """Other ways of running the survey, compared with the specification."""
 
     def test_default_is_the_plan(self):
-        # A billion probes, completion recorded by system. The
-        # specification as it stands, by regions, comes first in the list
-        # and stays one flag away. Waiting at the mid-plane is still there
-        # for the far smaller fleets it suits.
+        # A billion probes, completion recorded by system, as the
+        # specification has it. Recording by region comes first in the
+        # list and stays one flag away. Waiting at the mid-plane is still
+        # there for the far smaller fleets it suits.
         self.assertEqual(pp.Scenario().probes, 10 ** 9)
         self.assertEqual(pp.Scenario().strategy, "systems")
         self.assertEqual(pp.derive(pp.Scenario())["strategy"], "systems")
@@ -1665,7 +1688,9 @@ class TestStrategies(unittest.TestCase):
         self.assertEqual(parse(["--strategy", "regions"]).strategy,
                          "regions")
         help_text = " ".join(pp.build_parser().format_help().split())
-        self.assertIn("default systems;", help_text)
+        self.assertIn("default systems, as the specification has it",
+                      help_text)
+        self.assertNotIn("specification as it stands", help_text)
         self.assertIn("default 1000000000, one billion", help_text)
         self.assertEqual(ten_thousand().strategy, "systems-midplane")
         with self.assertRaises(ValueError):
@@ -2956,7 +2981,8 @@ class TestStillField(unittest.TestCase):
         for phrase in ["waiting for the last systems",
                        "The two that record by system are the same here",
                        "only the facts of its neighbors can matter to it",
-                       "Spread evenly, one probe to a region of its own",
+                       "Physical Layer 4.5 spreads them evenly, one "
+                       "probe to a region of its own",
                        "into the survey",
                        "a simulation that follows single probes "
                        "(plan0_sim.py)",
