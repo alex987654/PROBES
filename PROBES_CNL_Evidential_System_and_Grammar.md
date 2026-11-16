@@ -304,11 +304,16 @@ Standard Frame (Overview §4.2): `GSF x y z meter` with SI
 prefixes or scientific notation; no other frame is definable.
 
 **TIME-1:** every epoch uses the Pulsar Time Standard: integer
-cycle counts of at least two beacons from `CAT-BCN`. Every
-duration uses seconds with SI prefixes. Epochs referenced from
-clause interiors (dated events, template T16) are declared in
-the `epochs:` envelope list as `EP-*` entries and referenced by
-identifier, keeping clauses within the 18-token cap.
+cycle counts of at least two beacons from `CAT-BCN`, each
+counted from the catalogue activation epoch `T_act` (Physical
+Architecture §4.5). One zero serves every beacon, so two counts
+name one instant. It is the epoch at which recording begins
+(DSP-2): no message needs a count from before it, and it tells
+nothing of where the fleet set out. Every duration uses seconds
+with SI prefixes. Epochs referenced from clause interiors (dated
+events, template T16) are declared in the `epochs:` envelope
+list as `EP-*` entries and referenced by identifier, keeping
+clauses within the 18-token cap.
 
 ### 5.3a Identifier extensions
 

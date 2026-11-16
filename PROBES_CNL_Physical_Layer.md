@@ -354,7 +354,8 @@ Countermeasures, in force from the first transmitted bit:
    journal-local); recorded survey begins at the seed, at
    `T_act`, for every probe alike. **DSP-3:** message emission
    fleet-wide begins at a catalogue activation epoch `T_act` ≥
-   the dispersal envelope. The envelope is the disc diameter
+   the dispersal envelope; beacon cycle counts run from that
+   epoch (TIME-1). The envelope is the disc diameter
    divided by the cruise speed, the longest leg possible from
    any entry point. No smaller value is origin-blind: an
    envelope sized to the fleet's own longest leg would encode

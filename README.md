@@ -203,9 +203,10 @@ language.
 ### 4.3 Pulsar Time Standard (PTS) and unit scrub
 
 Epochs are integer cycle counts of registered millisecond-pulsar
-beacons (`BCN-1` … `BCN-8`, catalogued in `CAT-BCN`), quoted
-against at least two beacons for disambiguation. Durations use
-the SI second with prefixes.
+beacons (`BCN-1` … `BCN-8`, catalogued in `CAT-BCN`), counted
+from the fleet-wide activation epoch (Physical Layer document,
+§4.5) and quoted against at least two beacons for
+disambiguation. Durations use the SI second with prefixes.
 
 Every origin-derived unit is removed from the lexicon:
 
