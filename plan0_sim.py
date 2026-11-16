@@ -604,6 +604,49 @@ def matrix(name: str) -> list:
         add("trial", (1,), probes=216, rule="cells-roam", records=never)
         return runs
 
+    if name == "even":
+        # The runs that the table for the calculator is made from (parts
+        # 2, 3 and 5 of the full set, for the rule "cells-roam"), with
+        # the probes on a regular lattice: one probe to a region of its
+        # own, as the dispersal doctrine has it.
+        for share in (0.0, 0.8, 0.95, 0.99):
+            for late in (3.0, 10.0, 30.0, 100.0, 300.0, 400.0):
+                add("even knowledge", (1, 2), probes=4096, rule="cells-roam",
+                    seeding="lattice", foresight=share, records=late)
+            if share > 0.0:
+                add("even knowledge", (1, 2), probes=4096, rule="cells-roam",
+                    seeding="lattice", foresight=share)
+                add("even knowledge", (1, 2), probes=4096, rule="cells-roam",
+                    seeding="lattice", foresight=share, records=never)
+        add("even knowledge", (1, 2), probes=4096, seeding="lattice",
+            rule="cells-roam")
+        add("even knowledge", (1, 2), probes=4096, seeding="lattice",
+            rule="cells-roam", records=never)
+        add("even knowledge", (1, 2), probes=4096, rule="cells-roam",
+            seeding="lattice", foresight=1.0)
+        add("even knowledge", (1, 2), probes=4096, seeding="lattice",
+            rule="cells")
+        for each in (10.0, 30.0, 300.0):
+            add("even per probe", (1, 2), per_probe=each, rule="cells-roam",
+                seeding="lattice", probes=(1728 if each > 100 else 4096))
+        for stay in (0.05, 0.4):
+            add("even stay", (1, 2), probes=4096, stay=stay,
+                rule="cells-roam", seeding="lattice")
+        # what lost probes cost where every probe has a region of its own
+        for way in (dict(rule="cells"),
+                    dict(rule="cells-roam"),
+                    dict(rule="cells-roam", records=never),
+                    dict(rule="cells-roam", foresight=0.95, records=never)):
+            add("even losses", (1, 2), probes=4096, seeding="lattice",
+                absent=0.1, **way)
+        add("even losses", (1, 2), probes=4096, seeding="lattice",
+            rule="cells-roam", foresight=1.0, absent=0.1, absent_known=False)
+        add("even losses", (1, 2), probes=4096, seeding="lattice",
+            rule="cells-roam", absent=0.5)
+        add("even losses", (1, 2), probes=4096, seeding="lattice",
+            rule="cells-roam", foresight=0.95, records=never, absent=0.5)
+        return runs
+
     full = name == "full"
     main_seeds = (1, 2, 3) if full else (1, 2)
     side_seeds = (1, 2) if full else (1,)
@@ -891,7 +934,7 @@ _PLAIN = dict(rule="cells-roam", foresight=0.0, records=0.0, announce=False,
               absent_known=True, twins=0.0, repeat_stay=False, drift=0.0)
 
 
-def _pick(summary: dict, probes=None, **changed):
+def _pick_plain(summary: dict, probes=None, **changed):
     """The entry of the summary whose settings are those of the plain
     cells-roam run except for `changed`: in a box of `probes` probes, or
     in the largest box there is."""
@@ -907,9 +950,16 @@ def _pick(summary: dict, probes=None, **changed):
                                          entry["runs"]))
 
 
-def calibration(summary: dict) -> dict:
-    """The table that plan0_pace.py carries, from the results of a set.
+def calibration(summary: dict, seeding: str = "points") -> dict:
+    """A table that plan0_pace.py carries, from the results of a set: for
+    probes that start at points drawn at random, or on a regular lattice.
     Every ratio compares two ways of working in boxes of the same size."""
+    usual = dict(_PLAIN, seeding=seeding)
+
+    def _pick(entries, probes=None, **changed):
+        changed.setdefault("seeding", seeding)
+        return _pick_plain(entries, probes=probes, **changed)
+
     def per_system(entry):
         return [None if entry["times"].get(level) is None else
                 entry["times"][level] / entry["config"]["per_probe"]
@@ -962,7 +1012,7 @@ def calibration(summary: dict) -> dict:
     knowledge = []
     for entry in summary.values():
         c = entry["config"]
-        if any(c.get(key) != value for key, value in _PLAIN.items()
+        if any(c.get(key) != value for key, value in usual.items()
                if key not in ("foresight", "records")):
             continue
         best = _pick(summary, foresight=c["foresight"], records=c["records"])
@@ -1031,6 +1081,9 @@ what a probe knows of the others:
 sets of runs (--set NAME):
   full     every question the simulation was built for, about 240 runs
   limited  the same questions with smaller boxes and fewer repeats
+  even     probes that start spread evenly, one to a region of its own:
+           the runs behind the table that the pace calculator uses by
+           default, about 80 runs
   trial    four small runs, to check that everything works
   Finished runs are written to results.jsonl in the folder given by
   --out, one per line, as soon as they end. Starting the same set again
@@ -1127,7 +1180,7 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--seed", type=int, metavar="NUMBER",
                    help="seed of the random numbers (default 1)")
     g = p.add_argument_group("sets of runs")
-    g.add_argument("--set", choices=("full", "limited", "trial"),
+    g.add_argument("--set", choices=("full", "limited", "even", "trial"),
                    metavar="NAME", dest="set_name",
                    help="run a whole set; see below")
     g.add_argument("--out", metavar="FOLDER", default="plan0_sim_results",
@@ -1145,8 +1198,10 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--report", action="store_true",
                    help="print a table of the results in the folder")
     g.add_argument("--table", action="store_true",
-                   help="with --report: print the table that the pace "
-                        "calculator carries, worked out from the results")
+                   help="with --report: print a table that the pace "
+                        "calculator carries, worked out from the results: "
+                        "for starting points drawn at random, or with "
+                        "--start lattice for probes spread evenly")
     g.add_argument("--json", metavar="FILE",
                    help="also write the result or the table to this file")
     return p
@@ -1171,7 +1226,7 @@ def main(argv=None) -> int:
     if args.set_name or args.report:
         summary = summarise(path)
         if args.table:
-            summary = calibration(summary)
+            summary = calibration(summary, args.seeding or "points")
             print(json.dumps(summary, indent=1))
         else:
             print(render_summary(summary))

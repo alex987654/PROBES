@@ -135,7 +135,7 @@ class TestOneRun(unittest.TestCase):
 class TestSets(unittest.TestCase):
     def test_every_run_of_every_set_is_well_formed(self):
         for name, low, high in (("full", 200, 260), ("limited", 100, 140),
-                                ("trial", 4, 4)):
+                                ("even", 85, 100), ("trial", 4, 4)):
             jobs = ps.matrix(name)
             self.assertGreaterEqual(len(jobs), low, name)
             self.assertLessEqual(len(jobs), high, name)
@@ -151,6 +151,11 @@ class TestSets(unittest.TestCase):
         # The limited set asks the same questions as the full one.
         self.assertEqual({group for group, _ in ps.matrix("full")},
                          {group for group, _ in ps.matrix("limited")})
+        # The set for evenly spread starts has every probe on a lattice,
+        # and the full set is what it was when its results were stored.
+        self.assertTrue(all(config["seeding"] == "lattice"
+                            for _, config in ps.matrix("even")))
+        self.assertEqual(len(ps.matrix("full")), 237)
 
     def test_labels(self):
         self.assertEqual(ps.label_of(dict(rule="cells")), "cells")
