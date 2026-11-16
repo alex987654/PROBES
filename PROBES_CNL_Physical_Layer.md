@@ -412,7 +412,9 @@ target-selection rule (`PROC-1`) selects among unsurveyed
 systems only those reachable within the current energy budget
 `E_leg` — a public catalogue rule evaluated on local state, so
 routing stays sender-invariant without any probe disclosing
-that state.
+that state. Dispersal legs close the loop the same way: their
+refueling stops fall under DSP-2 and leave no recorded
+observation.
 
 ### 6.2 Storage and fuel
 
