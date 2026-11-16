@@ -59,10 +59,10 @@ STRATEGIES = {
     "sweep-line": ("the fleet works along a line held from the galactic "
                    "center to the rim while the disc turns past it; a "
                    "system is surveyed when it crosses the line"),
-    "systems": ("as regions, but completion is recorded by system, so a "
-                "system surveyed anywhere is recognized and not surveyed "
-                "again; a probe goes to the nearest system it does not "
-                "know to be surveyed"),
+    "systems": ("completion is recorded by system, so a system surveyed "
+                "anywhere is recognized and not surveyed again; a probe "
+                "first works its own region and then goes to the nearest "
+                "system it does not know to be surveyed"),
     "systems-midplane": ("as systems, with the probes waiting in a thin "
                          "layer at the mid-plane of the disc, where "
                          "systems are closest together, and taking each "
@@ -112,11 +112,13 @@ PLANE_SWINGS_NEEDED = 4.0
 # longer result is a scale estimate and is labeled so at the headline.
 SCALE_ESTIMATE_YEARS = 1.0e8
 
-# Distance at which two archive stations hold the rate of the link budget
-# of Physical Layer section 2.2. That budget is for two probes one probe
-# spacing apart, 2.4e17 meters, with apertures of 1.7 meters; stations
-# carry apertures of 10 meters, and the rate goes as the square of
-# (aperture x aperture / distance), which gives 2.4e17 x (10 / 1.7)^2.
+# The link budget of Physical Layer section 2.2 is for two probes with
+# apertures of 1.7 meters, one probe spacing apart: this distance.
+BUDGET_SPACING_M = 2.4e17
+
+# Distance at which two archive stations hold the rate of that budget.
+# Stations carry apertures of 10 meters, and the rate goes as the square
+# of (aperture x aperture / distance), which gives 2.4e17 x (10 / 1.7)^2.
 LINK_REFERENCE_M = 8.0e18
 
 # Staffed archive stations of the doctrine (Physical Layer section 3.2,
@@ -167,12 +169,12 @@ REFERENCE_EXHAUST = (
 
 ARCHIVE_PRESETS = {
     "full-network": dict(
-        cache_spacing_kpc=None, detour_kpc=0.01, consolidated=True,
+        cache_spacing_kpc=None, detour_kpc=0.0, consolidated=True,
         deposit_every=1,
         help=("staffed archive stations in the calm zones between spiral "
-              "arms, plus unattended deposit boxes along every survey "
-              "route; records merge into shared archives on the regular "
-              "consolidation cycle"),
+              "arms, plus an unattended deposit box in every surveyed "
+              "system, which costs no side trip; records merge into "
+              "shared archives on the regular consolidation cycle"),
         spec_note=("custodial archive nodes plus passive caches, the first "
                    "and second tiers of Physical Layer sections 3.1-3.2; "
                    "about a million nodes, or one per probe in a smaller "
@@ -208,9 +210,10 @@ ARCHIVE_PRESETS = {
     "none": dict(
         cache_spacing_kpc=None, detour_kpc=0.0, consolidated=False,
         deposit_every=None,
-        help=("no shared archives at all; probes never learn what others "
-              "have finished, so duplicated work sits at the model's cap "
-              "- included to show why the archive network exists"),
+        help=("no shared archives at all; a probe learns of the work of "
+              "others only by beam from the probes around it, and with "
+              "--no-neighbor-beams not at all - included to show what the "
+              "archive network is for"),
         spec_note=("no cache nodes at all; against fleet doctrine, shown "
                    "for contrast"),
     ),
@@ -262,7 +265,7 @@ _WHOLE_NUMBER_FIELDS = ("probes", "station_count", "deposit_every",
                         "neighbors")
 # Inputs that may be left unset (the layout preset or the model fills in).
 _OPTIONAL_FIELDS = ("systems", "stellar_density", "acceleration_m_s2",
-                    "dispersal_leg_kpc",
+                    "dispersal_leg_kpc", "region_systems",
                     "cache_spacing_kpc", "detour_kpc", "station_count",
                     "deposit_every")
 
@@ -316,7 +319,9 @@ class Scenario:
     # Years to gather propellant equal to the empty mass. 0 leaves the
     # stay per system at dwell_years whatever the speed.
     refuel_years_per_mass: float = 0.0
-    region_systems: float = 1000.0       # visited systems per record region
+    # Visited systems per region. None: one region per probe, its whole
+    # share, as Physical Layer section 4.5 has it.
+    region_systems: Optional[float] = None
     # Scattering before the survey (Physical Layer section 4.5). No probe
     # may start before the last one can have arrived, or the start times
     # would point back to where the fleet set out. The only allowance that
@@ -329,6 +334,11 @@ class Scenario:
     archives: str = "full-network"
     strategy: str = "systems"            # see STRATEGIES
     starts: str = "even"                 # see STARTS; section 4.5
+    # Whether a probe beams the record of every system it finishes to the
+    # probes around it and to its nearest archive station (Physical Layer
+    # sections 2.2 and 4.2). Without it a probe's records move only when
+    # it carries them to an archive point.
+    neighbor_beams: bool = True
     cache_spacing_kpc: Optional[float] = None   # overrides preset
     detour_kpc: Optional[float] = None          # overrides preset
     station_count: Optional[int] = None         # derives spacing + detour
@@ -399,6 +409,9 @@ class Scenario:
                 or self.strategy not in STRATEGIES):
             raise ValueError("unknown strategy %r (choices: %s)"
                              % (self.strategy, ", ".join(STRATEGIES)))
+        if not isinstance(self.neighbor_beams, bool):
+            raise ValueError("neighbor_beams must be true or false (got %r)"
+                             % (self.neighbor_beams,))
         if not isinstance(self.starts, str) or self.starts not in STARTS:
             raise ValueError("unknown way of starting %r (choices: %s)"
                              % (self.starts, ", ".join(STARTS)))
@@ -563,9 +576,8 @@ INPUT_TABLE = [
     ("refuel_years_per_mass", None, None, None, False,
      "not modeled unless given; no study fixes a harvesting rate"),
     ("region_systems", None, None, None, False,
-     "assumption for fleets whose probes each survey many regions; "
-     "Physical Layer section 4.5 gives every probe one region, its "
-     "whole share, and a smaller share is treated as the region"),
+     "Physical Layer section 4.5: one region per probe, its whole share, "
+     "unless a number is given"),
     ("dispersal_leg_kpc", None, None, None, False,
      "the disc diameter unless given: the longest leg possible from any "
      "starting point, so the wait does not depend on where the fleet "
@@ -583,6 +595,10 @@ INPUT_TABLE = [
     ("starts", None, None, None, False,
      "Physical Layer section 4.5: every probe is seeded in a region of "
      "its own"),
+    ("neighbor_beams", None, None, None, False,
+     "Physical Layer sections 2.2 and 4.2: a probe beams the record of "
+     "every system it finishes to the probes around it and to its "
+     "nearest archive station"),
     ("cache_spacing_kpc", None, None, None, False,
      "set by the archive layout"),
     ("detour_kpc", None, None, None, False,
@@ -1993,12 +2009,13 @@ def _unused_inputs(sc: Scenario, layout: dict, gal: dict) -> list:
              "the chosen layout has no staffed stations, so nothing is "
              "consolidated")
     if sc.strategy in RECORDS_BY_SYSTEM:
-        note("neighbors",
-             "where completion is recorded by system the duplicated work "
-             "follows from the age of a probe's knowledge, not from the "
-             "number of neighboring probes")
+        if not sc.neighbor_beams:
+            note("neighbors",
+                 "where completion is recorded by system the duplicated "
+                 "work follows from the age of a probe's knowledge, not "
+                 "from the number of neighboring probes")
     else:
-        for name in ("confidence", "starts"):
+        for name in ("confidence", "starts", "neighbor_beams"):
             note(name,
                  "it applies where completion is recorded by system (the "
                  "strategies %s)" % " and ".join(RECORDS_BY_SYSTEM))
@@ -2052,6 +2069,11 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
     # OPEN_FIELD_HOP). Waiting at the mid-plane needs the stars to swing
     # through it several times as well.
     by_system = sc.strategy in RECORDS_BY_SYSTEM
+    # Records by beam (Physical Layer sections 2.2 and 4.2): a probe sends
+    # the record of every system it finishes to the probes around it and
+    # to its nearest archive station, as it is made.
+    beams = by_system and sc.neighbor_beams
+    geometry = fleet_geometry(sc)
     hop_scale = sc.path_factor * sc.depth ** (-1.0 / 3.0)
     mixing = plane_wait = None
     if by_system:
@@ -2129,7 +2151,8 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
     # the two, and the region cycle must shrink with it; otherwise the
     # staleness below would be measured against a cycle longer than the
     # entire survey.
-    region_systems = min(sc.region_systems, visited_per_probe)
+    region_systems = (visited_per_probe if sc.region_systems is None
+                      else min(sc.region_systems, visited_per_probe))
     regions_per_probe = visited_per_probe / region_systems
     t_region_s = region_systems * t_sys_s
 
@@ -2161,6 +2184,11 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
         tau_s = math.inf
     else:
         refresh_s = t_region_s * dep_every
+        if beams and layout["consolidated"]:
+            # every record goes to the station by beam as it is made, and
+            # the station's word comes back the same way: what is off the
+            # record, or not yet heard, is the system in hand
+            refresh_s = t_sys_s
         if layout["consolidated"]:
             staleness_parts = dict(
                 deposit_interval=refresh_s,
@@ -2248,9 +2276,13 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
         share_time_s = still_years * YEAR_S
         still_ramp_s = max(0.0, still_first_s - still_hop_m / v)
         spacing_s = still_hop_m / CLEARED_FIELD_HOP / v
-        read = still_field(visited_per_probe, sc.confidence,
-                           None if math.isinf(tau_s)
-                           else tau_s / share_time_s, sc.starts)
+        # How late the records of the probes around are, beyond their
+        # travel at light speed: not at all by beam; through the archives
+        # by the whole of their staleness.
+        late = (0.0 if beams else None if math.isinf(tau_s)
+                else tau_s / share_time_s)
+        read = still_field(visited_per_probe, sc.confidence, late,
+                           sc.starts)
         marks = [0.0] + read["levels"]
         wasted_per_system = read["wasted"] / (1.0 - read["wasted"])
         # Every hop, wasted or not, costs the time to speed up and slow
@@ -2370,8 +2402,9 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
             equal_work_years=equal_work,
             share_time_years=share_time_s / YEAR_S,
             foresight=sc.confidence,
-            records_late_share_times=(None if math.isinf(tau_s)
-                                      else tau_s / share_time_s),
+            records_late_share_times=late,
+            records_by_beam=beams,
+            beam_years=geometry["light_years_per_spacing"],
             wasted_visit_share=read["wasted"],
             last_stands_for_9999=read["last_stands_for_9999"],
             outside_simulated_range=read["outside"],
@@ -2438,13 +2471,27 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
     # Unattended boxes have no power to beam with: a probe hands its
     # records over at the box, at close range, so no distance penalty
     # applies there.
-    messages_per_probe = 0.0 if dep_every is None else regions_per_probe
-    link_m = spacing_m if dep_every and layout["consolidated"] else None
+    #
+    # Where records go by beam a probe sends one message per system, to
+    # each of the probes around it and to its nearest station. The budget
+    # is drawn up for two probes one probe spacing of the plan apart.
     link_rate_bps = sc.bitrate_bps
-    if link_m is not None:
-        link_rate_bps *= (LINK_REFERENCE_M / link_m) ** 2
+    if beams:
+        messages_per_probe = visited_per_probe
+        link_m = geometry["spacing_kpc"] * KPC_M
+        link_rate_bps *= (BUDGET_SPACING_M / link_m) ** 2
+        link_copies = sc.neighbors + (1 if layout["consolidated"] else 0)
+        link_kind = "probes"
+    else:
+        messages_per_probe = 0.0 if dep_every is None else regions_per_probe
+        link_m = spacing_m if dep_every and layout["consolidated"] else None
+        if link_m is not None:
+            link_rate_bps *= (LINK_REFERENCE_M / link_m) ** 2
+        link_copies = 1
+        link_kind = ("stations" if link_m is not None
+                     else "boxes" if dep_every else None)
     link_s_per_message = sc.message_bytes * 8.0 / link_rate_bps
-    link_s_per_probe = messages_per_probe * link_s_per_message
+    link_s_per_probe = messages_per_probe * link_copies * link_s_per_message
     fleet_messages = messages_per_probe * sc.probes
 
     # A region is a volume: the one that holds region_systems visited
@@ -2472,7 +2519,7 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
     return dict(
         scenario=asdict(sc),
         layout=layout,
-        geometry=fleet_geometry(sc),
+        geometry=geometry,
         galaxy=gal,
         systems=gal["systems"],
         speed_m_per_s=v,
@@ -2534,7 +2581,8 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
         # arrivals at a system, the wasted ones included
         stops_per_probe=stops_per_probe,
         region_systems=region_systems,
-        region_shrunk=region_systems < sc.region_systems,
+        region_shrunk=(sc.region_systems is not None
+                       and region_systems < sc.region_systems),
         regions_per_probe=regions_per_probe,
         region_cycle_years=t_region_s / YEAR_S,
         staleness_years=None if math.isinf(tau_s) else tau_s / YEAR_S,
@@ -2573,6 +2621,8 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
             fleet_messages=fleet_messages,
             link_rate_bps=link_rate_bps,
             link_distance_m=link_m,
+            link_kind=link_kind,
+            link_copies=link_copies,
             link_seconds_per_message=link_s_per_message,
             link_years_per_probe=link_s_per_probe / YEAR_S,
         ),
@@ -2817,6 +2867,17 @@ _STALENESS_LABELS = {
     "carried_between_points": "carried between boxes at probe speed",
     "reading_interval": "between readings of the archives",
 }
+# where the records go to the station by beam, one system at a time
+_STALENESS_LABELS_BY_BEAM = dict(
+    _STALENESS_LABELS,
+    deposit_interval="between records sent to the station",
+    reading_interval="between words from the station")
+
+
+def staleness_labels(r: dict) -> dict:
+    still = r.get("still")
+    return (_STALENESS_LABELS_BY_BEAM if still and still["records_by_beam"]
+            else _STALENESS_LABELS)
 
 
 def flag_for(name: str) -> str:
@@ -3159,6 +3220,8 @@ def describe_knowledge(r: dict, canonical: bool = False) -> list:
             "(--confidence), and %s. In the simulation %s of all visits "
             "are then wasted."
             % (sure,
+               "records of their work reach it by beam, at the speed of "
+               "light" if still["records_by_beam"] else
                "no records of their work ever reach it" if late is None else
                "records of their work reach it %s after the event, %s times "
                "what one probe needs for its share"
@@ -3642,14 +3705,31 @@ def render_report(r: dict, canonical: bool = False) -> str:
         % (human_count(c["messages_per_probe"]),
            human_count(c["fleet_messages"])))
     if c["messages_per_probe"] == 0:
-        add("  no archive points, so no messages are sent")
+        add("  no archive points and no beams between probes:")
+        add("  no messages are sent")
     else:
         hours = c["link_seconds_per_message"] / 3600.0
         text = ("link time per message: %s at %s bits per second."
                 % ("%s hours" % sig(hours, 2) if hours < 48
                    else "%s days" % sig(hours / 24.0, 2),
                    sig(c["link_rate_bps"], 2)))
-        if c["link_distance_m"] is None:
+        if c["link_kind"] == "probes":
+            to = ("the %d probes around it" % sc["neighbors"]
+                  if c["link_copies"] == sc["neighbors"] else
+                  "the %d probes around it and to its nearest archive "
+                  "station" % sc["neighbors"])
+            text += (" A probe beams the record of every system it "
+                     "finishes to %s. The link budget gives %s bits per "
+                     "second between probes %s apart; the rate falls with "
+                     "the square of the distance, here the %s between "
+                     "neighboring probes. A station is farther off and "
+                     "carries larger optics, which keeps its link at about "
+                     "the same rate."
+                     % (to, sig(sc["bitrate_bps"], 2),
+                        fmt_kiloparsecs(BUDGET_SPACING_M / KPC_M, canonical),
+                        fmt_kiloparsecs(c["link_distance_m"] / KPC_M,
+                                        canonical)))
+        elif c["link_distance_m"] is None:
             text += (" Records are handed over at the unattended boxes "
                      "themselves, at close range, so the rate of the link "
                      "budget is used as it stands.")
@@ -3666,9 +3746,11 @@ def render_report(r: dict, canonical: bool = False) -> str:
             add(line)
         share = (c["link_years_per_probe"] / r["total_years"]
                  if math.isfinite(r["total_years"]) else 0.0)
-        text = ("link time per probe: %s, %s. The wire form is the "
+        text = ("link time per probe: %s%s, %s. The wire form is the "
                 "channel's admission ticket (Physical Layer 2.2)."
                 % (fmt_years(c["link_years_per_probe"], canonical),
+                   "" if c["link_copies"] == 1
+                   else ", every message sent %d times" % c["link_copies"],
                    "negligible" if share < 1e-3
                    else "%s of the survey" % percent(share)))
         for line in fill(text):
@@ -3677,19 +3759,36 @@ def render_report(r: dict, canonical: bool = False) -> str:
     add("Knowledge staleness and duplication")
     add("-" * 60)
     know = r["knowledge"]
-    if r["staleness_infinite"]:
+    if r["staleness_infinite"] and know is not None \
+            and r["still"]["records_by_beam"]:
+        for line in fill(
+                "no shared archives: a probe hears of the work of the "
+                "probes around it by beam, after the light time from one "
+                "probe to the next, %s, and of no other work"
+                % fmt_duration(r["still"]["beam_years"], canonical, 3)):
+            add(line)
+    elif r["staleness_infinite"]:
         add("  no shared archives: staleness unbounded, duplication at cap")
     else:
         if know is None:
             add("  completion facts are up to %s old when a region is"
                 % fmt_duration(r["staleness_years"], canonical, 3))
             add("  chosen, the sum of:")
+        elif r["still"]["records_by_beam"]:
+            for line in fill(
+                    "a probe hears of the work of the probes around it by "
+                    "beam, after the light time from one probe to the "
+                    "next, %s. Through the archives the same record is up "
+                    "to %s old, the sum of:"
+                    % (fmt_duration(r["still"]["beam_years"], canonical, 3),
+                       fmt_duration(r["staleness_years"], canonical, 3))):
+                add(line)
         else:
             add("  what a probe knows of the work of the others is up to")
             add("  %s old, the sum of:"
                 % fmt_duration(r["staleness_years"], canonical, 3))
         for name, years in r["staleness_parts_years"].items():
-            add("    %-36s %s" % (_STALENESS_LABELS[name],
+            add("    %-36s %s" % (staleness_labels(r)[name],
                                   fmt_duration(years, canonical, 3)))
     if know is not None:
         for line in describe_knowledge(r, canonical):
@@ -3984,7 +4083,7 @@ def render_explain(r: dict) -> str:
         % ("unbounded (no archives)" if r["staleness_infinite"]
            else "the sum of delays that follow one another"),
     ]
-    lines += ["  %-36s %.4g years" % (_STALENESS_LABELS[name], years)
+    lines += ["  %-36s %.4g years" % (staleness_labels(r)[name], years)
               for name, years in r["staleness_parts_years"].items()]
     if not r["staleness_infinite"]:
         lines.append("  = %.4g years" % r["staleness_years"])
@@ -4042,10 +4141,12 @@ def render_explain(r: dict) -> str:
                 "at points drawn at random"),
             "  share time = systems per probe x (0.78 x time per spacing + "
             "stay) = %.4g years" % still["share_time_years"],
-            "  foresight %.3g; records late by %s share times; %.4g systems "
-            "per probe" % (still["foresight"],
-                           "(never)" if late is None else "%.4g" % late,
-                           r["visited_per_probe"]),
+            "  foresight %.3g; records %s; %.4g systems per probe"
+            % (still["foresight"],
+               "by beam at light speed" if still["records_by_beam"]
+               else "never" if late is None
+               else "late by %.4g share times" % late,
+               r["visited_per_probe"]),
             "  time until a share is done = systems per probe x (travel x "
             "time per spacing",
             "  + stops x stay), with travel and stops from the table:",
@@ -4137,10 +4238,10 @@ this repository.
 The estimate adds up four parts: (1) an initial scattering phase in
 which every probe first travels to an assigned starting point, (2) the
 survey itself - traveling star to star and pausing at each one, (3)
-extra duplicated work done because probes only learn what others have
-finished after a delay set by the archive layout, and (4) side trips to
-archive sites to deposit and read records. Message transmission time is
-also computed, and shown to be negligible.
+extra duplicated work done because probes learn what others have
+finished only after a delay, and (4) side trips to archive sites, where
+the archive layout asks for them. Message transmission time is also
+computed, and shown to be negligible.
 
 The report also says how sure the answer is, what every stop costs in
 propellant, how many probes the survey can afford to lose, and which
@@ -4148,7 +4249,9 @@ effects the estimate leaves out, each with its size.
 
 By default the fleet records which systems are done one by one, as the
 documents have it; --strategy regions gives the estimate for recording
-by region. With the default fleet every probe has only a hundred
+by region. A probe leaves its records in a box in the system it has
+surveyed and beams word of it to the probes around it and to the
+nearest archive station. With the default fleet every probe has only a hundred
 systems, and the stars hardly move while it surveys them; the figures
 for the survey phase then come from a simulation that follows single
 probes, plan0_sim.py in this folder.
@@ -4309,8 +4412,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "(default 0: the stay is --dwell at any speed)")
     g.add_argument("--region-systems", type=float, metavar="COUNT",
                    dest="region_systems",
-                   help="visited systems per completion-record region; sets "
-                        "how often a probe deposits records (default 1000)")
+                   help="visited systems per region (default: one region "
+                        "per probe, its whole share, as the specification "
+                        "has it); where records are carried to the "
+                        "archives it sets how often a probe deposits them")
     g.add_argument("--dispersal-leg", type=float, metavar="KILOPARSECS",
                    dest="dispersal_leg_kpc",
                    help="distance allowed for the initial scattering, "
@@ -4363,6 +4468,14 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--deposit-every", type=int, metavar="COUNT",
                    dest="deposit_every",
                    help="deposit records only after every Nth region")
+    g.add_argument("--no-neighbor-beams", action="store_false",
+                   default=None, dest="neighbor_beams",
+                   help="probes do not beam their records to the probes "
+                        "around them and to the nearest archive station; "
+                        "a probe then carries its records to an archive "
+                        "point, and learns of the work of others through "
+                        "the archives alone (by default the records go by "
+                        "beam, as the specification has it)")
     g.add_argument("--confidence", type=float, metavar="FRACTION",
                    help="how sure a probe is of what it takes the other "
                         "probes to have done (default 0.95). Where the "

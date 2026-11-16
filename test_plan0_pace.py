@@ -27,9 +27,17 @@ def ten_thousand(**inputs):
     the mid-plane, which suits a survey of hundreds of millions of years.
     The laws for stars that mix while the survey lasts were worked out for
     this fleet and stay pinned on it, whatever the defaults of the
-    calculator become."""
+    calculator become: regions of a thousand systems, records carried to
+    the archives and not beamed, and a deposit box ten parsecs off the
+    route in the layout with the full network."""
     inputs.setdefault("probes", 10_000)
     inputs.setdefault("strategy", "systems-midplane")
+    inputs.setdefault("region_systems", 1000.0)
+    if inputs["strategy"] in pp.RECORDS_BY_SYSTEM:
+        inputs.setdefault("neighbor_beams", False)
+    if (inputs.get("archives", "full-network") == "full-network"
+            and inputs.get("station_count") is None):
+        inputs.setdefault("detour_kpc", 0.01)
     return pp.Scenario(**inputs)
 
 
@@ -91,11 +99,16 @@ class TestModel(unittest.TestCase):
         # years, which no probe may cut short without showing where the
         # fleet set out from.
         #
-        # Within the band the default moved once more, from 989 to 987
-        # thousand years: the probes now start spread evenly, one to a
-        # region of its own, as Physical Layer 4.5 has it, where they
-        # started at points drawn at random. The survey after the
-        # scattering is 8,700 years where it was 10,600.
+        # Within the band the default moved twice more, from 989 to 986
+        # thousand years, as the model was brought into line with the
+        # Physical Layer. The probes start spread evenly, one to a region
+        # of its own (section 4.5), where they started at points drawn at
+        # random. They beam the record of every system to the probes
+        # around them (sections 2.2 and 4.2), where records came through
+        # the archives, too late to matter. And they leave their records
+        # in a box in the surveyed system (section 3.1), where they made a
+        # side trip of ten parsecs. The survey after the scattering is
+        # 7,900 years where it was 10,600.
         r = pp.derive(pp.Scenario())
         self.assertEqual(r["scenario"]["probes"], 10 ** 9)
         self.assertEqual(r["strategy"], "systems")
@@ -104,9 +117,12 @@ class TestModel(unittest.TestCase):
         self.assertEqual(r["visited_per_probe"], 100.0)
         self.assertGreater(r["total_years"], 0.95e6)
         self.assertLess(r["total_years"], 1.05e6)
-        self.assertAlmostEqual(r["total_years"] / 987.2e3, 1.0, delta=0.0005)
+        self.assertTrue(r["scenario"]["neighbor_beams"])
+        self.assertEqual(r["layout"]["detour_kpc"], 0.0)
+        self.assertAlmostEqual(r["total_years"] / 986.4e3, 1.0, delta=0.0005)
         self.assertAlmostEqual(
-            pp.derive(pp.Scenario(starts="random"))["total_years"] / 989.1e3,
+            pp.derive(pp.Scenario(starts="random", neighbor_beams=False,
+                                  detour_kpc=0.01))["total_years"] / 989.1e3,
             1.0, delta=0.0005)
         self.assertAlmostEqual(r["phases"]["dispersal_years"] / 9.785e5, 1.0,
                                places=3)
@@ -199,9 +215,18 @@ class TestModel(unittest.TestCase):
             pp.derive(ten_thousand(archives="none"))["duplication_capped"])
         # By system the same fleet takes its wasted visits from the
         # simulation of single probes, which has no ceiling.
+        # The default is one region per probe, its whole share, as
+        # Physical Layer 4.5 has it; a larger region still shrinks to it.
         plan = pp.derive(pp.Scenario())
-        self.assertTrue(plan["region_shrunk"])
+        self.assertIsNone(pp.Scenario().region_systems)
+        self.assertFalse(plan["region_shrunk"])
+        self.assertEqual(plan["region_systems"], plan["visited_per_probe"])
+        self.assertEqual(plan["regions_per_probe"], 1.0)
         self.assertFalse(plan["duplication_capped"])
+        self.assertTrue(pp.derive(pp.Scenario(
+            region_systems=1000.0))["region_shrunk"])
+        self.assertEqual(pp.derive(pp.Scenario(
+            probes=10_000))["regions_per_probe"], 1.0)
         # An ordinary fleet is untouched.
         r = pp.derive(ten_thousand())
         self.assertFalse(r["region_shrunk"])
@@ -713,8 +738,9 @@ class TestOneSourceOfTruth(unittest.TestCase):
         checked = 0
         for field in pp.fields(pp.Scenario):
             value = getattr(default, field.name)
-            if value is None:
-                continue        # no default value exists to pass
+            if value is None or isinstance(value, bool):
+                continue        # no default value exists to pass; a
+                                # switch is left alone by leaving it out
             self.assertIn(field.name, flags,
                           "%s cannot be set from the command line"
                           % field.name)
@@ -761,7 +787,9 @@ class TestOneSourceOfTruth(unittest.TestCase):
             self.assertEqual(
                 pp.derive(parse(argv + ["--probes", "10000", "--strategy",
                                         "systems-midplane"])),
-                pp.derive(ten_thousand(**kwargs)), argv)
+                pp.derive(pp.Scenario(probes=10_000,
+                                      strategy="systems-midplane",
+                                      **kwargs)), argv)
 
     def test_density_alone_means_uniform_disc_with_derived_count(self):
         sc = by_region(stellar_density=0.1, disc_radius_kpc=15.0,
@@ -1027,10 +1055,10 @@ class TestFleetGeometry(unittest.TestCase):
                                delta=0.03)
         self.assertAlmostEqual(r["phases"]["dispersal_years"] / 1e6, 1.0,
                                delta=0.03)
-        # The survey after activation: about nine thousand years, within
+        # The survey after activation: about eight thousand years, within
         # one consolidation cycle.
         after = r["total_years"] - r["phases"]["dispersal_years"]
-        self.assertAlmostEqual(after / 9e3, 1.0, delta=0.05)
+        self.assertAlmostEqual(after / 8e3, 1.0, delta=0.05)
         self.assertLess(after, sc.consolidation_years)
         self.assertTrue(g["stacked"])
         self.assertAlmostEqual(g["spacing_kpc"] * 1000, 7.91, delta=0.01)
@@ -1155,7 +1183,8 @@ class TestFleetGeometry(unittest.TestCase):
         self.assertAlmostEqual(
             2.44e17 * (10.0 / 1.7) ** 2 / pp.LINK_REFERENCE_M, 1.0,
             delta=0.06)
-        c = pp.derive(pp.Scenario())["comms"]
+        c = pp.derive(pp.Scenario(neighbor_beams=False))["comms"]
+        self.assertEqual(c["link_kind"], "stations")
         self.assertAlmostEqual(c["link_rate_bps"] / 0.5, 10.7, delta=0.1)
 
     def test_stations_fill_the_disc_like_the_probes(self):
@@ -2383,7 +2412,8 @@ class TestStrategies(unittest.TestCase):
             self.assertEqual([row["strategy"] for row in rows],
                              list(pp.STRATEGIES))
             for row in rows:
-                own = pp.derive(ten_thousand(strategy=row["strategy"]))
+                own = pp.derive(pp.replace(ten_thousand(strategy=name),
+                                           strategy=row["strategy"]))
                 self.assertAlmostEqual(
                     row["years_to_99_percent"],
                     own["reached"]["rows"][-1]["years"])
@@ -2917,13 +2947,23 @@ class TestStillField(unittest.TestCase):
         # own (Physical Layer 4.5). Starting points drawn at random stay
         # one flag away, with the figures they had as the default.
         self.assertEqual(pp.derive(pp.Scenario())["still"]["starts"], "even")
-        for starts, pinned in (
-                ("even", dict(wasted=0.064, half=2960, most=6910, last=8050,
-                              total=987_170)),
-                ("random", dict(wasted=0.161, half=3030, most=7660,
-                                last=9990, total=989_120))):
-            with self.subTest(starts=starts):
-                self.check_the_plan(pp.derive(pp.Scenario(starts=starts)),
+        self.assertTrue(pp.derive(pp.Scenario())["still"]["records_by_beam"])
+        for inputs, pinned in (
+                (dict(), dict(wasted=0.0099, half=2962, most=6839, last=7934,
+                              total=986_403)),
+                (dict(starts="random"),
+                 dict(wasted=0.0209, half=3032, most=7196, last=8693,
+                      total=987_162)),
+                # records through the archives, as the model had them
+                (dict(neighbor_beams=False),
+                 dict(wasted=0.0635, half=2962, most=6911, last=8045,
+                      total=986_515)),
+                (dict(starts="random", neighbor_beams=False,
+                      detour_kpc=0.01),
+                 dict(wasted=0.1609, half=3034, most=7658, last=9995,
+                      total=989_116))):
+            with self.subTest(inputs=inputs):
+                self.check_the_plan(pp.derive(pp.Scenario(**inputs)),
                                     **pinned)
 
     def check_the_plan(self, r, wasted, half, most, last, total):
@@ -2939,11 +2979,17 @@ class TestStillField(unittest.TestCase):
             still["share_time_years"],
             100 * (pp.derive(pp.Scenario(strategy="regions"))["hop_years"]
                    + 10.0), places=6)
-        # Records are later than the survey is long.
-        self.assertGreater(still["records_late_share_times"], 3.0)
-        self.assertAlmostEqual(
-            still["records_late_share_times"],
-            r["staleness_years"] / still["share_time_years"])
+        if still["records_by_beam"]:
+            # Records reach the probes around at the speed of light, 26
+            # years from one probe to the next.
+            self.assertEqual(still["records_late_share_times"], 0.0)
+            self.assertAlmostEqual(still["beam_years"], 25.8, delta=0.1)
+        else:
+            # Through the archives they are later than the survey is long.
+            self.assertGreater(still["records_late_share_times"], 3.0)
+            self.assertAlmostEqual(
+                still["records_late_share_times"],
+                r["staleness_years"] / still["share_time_years"])
         # The phases add up, and the wait for the largest shares is the
         # part that neither work nor wasted visits explain.
         self.assertAlmostEqual(sum(ph.values()) / r["total_years"], 1.0,
@@ -2963,11 +3009,12 @@ class TestStillField(unittest.TestCase):
                                    msg=m["fraction"])
         years = [m["years"] for m in r["milestones"]]
         self.assertEqual(years, sorted(years))
-        # One visit in sixteen is wasted where the probes start spread
-        # evenly, one in six where they start at random: 107 or 120 stops
-        # for a hundred systems.
+        # With records by beam one visit in a hundred is wasted, or one
+        # in fifty where the probes start at random. Through the archives
+        # it is one in sixteen, or one in six: 107 or 120 stops for a
+        # hundred systems.
         self.assertAlmostEqual(still["wasted_visit_share"], wasted,
-                               delta=0.001)
+                               delta=0.0001)
         wasted = still["wasted_visit_share"]
         self.assertAlmostEqual(
             r["stops_per_probe"],
@@ -2978,9 +3025,9 @@ class TestStillField(unittest.TestCase):
         # its records, at the end of a probe's share, delays none of them.
         into = {m["fraction"]: m["years"] - ph["dispersal_years"]
                 for m in r["milestones"]}
-        self.assertAlmostEqual(into[0.5] / half, 1.0, delta=0.005)
-        self.assertAlmostEqual(into[0.99] / most, 1.0, delta=0.005)
-        self.assertAlmostEqual(into[1.0] / last, 1.0, delta=0.005)
+        self.assertAlmostEqual(into[0.5] / half, 1.0, delta=0.0005)
+        self.assertAlmostEqual(into[0.99] / most, 1.0, delta=0.0005)
+        self.assertAlmostEqual(into[1.0] / last, 1.0, delta=0.0005)
         self.assertAlmostEqual(
             r["total_years"] - ph["dispersal_years"] - into[1.0],
             ph["archive_detours_years"], places=6)
@@ -3020,9 +3067,13 @@ class TestStillField(unittest.TestCase):
         base = pp.derive(pp.Scenario())
         sure = pp.derive(pp.Scenario(confidence=1.0))
         blind = pp.derive(pp.Scenario(confidence=0.5))
-        prompt = pp.derive(pp.Scenario(consolidation_years=100.0,
-                                       region_systems=3.0, detour_kpc=0.0))
-        none = pp.derive(pp.Scenario(archives="none"))
+        # records through the archives alone: as the layout delivers
+        # them, with a cycle of a century, and not at all
+        carried = pp.derive(pp.Scenario(neighbor_beams=False))
+        prompt = pp.derive(pp.Scenario(neighbor_beams=False,
+                                       consolidation_years=100.0,
+                                       region_systems=3.0))
+        none = pp.derive(pp.Scenario(neighbor_beams=False, archives="none"))
 
         def survey(r):
             return r["total_years"] - r["phases"]["dispersal_years"]
@@ -3030,16 +3081,39 @@ class TestStillField(unittest.TestCase):
                         base["still"]["wasted_visit_share"])
         self.assertLess(base["still"]["wasted_visit_share"],
                         blind["still"]["wasted_visit_share"])
+        self.assertEqual(base["still"]["records_late_share_times"], 0.0)
+        self.assertGreater(carried["still"]["records_late_share_times"], 3.0)
         self.assertLess(prompt["still"]["records_late_share_times"], 0.2)
-        self.assertLess(survey(prompt), survey(base))
+        self.assertLess(survey(prompt), survey(carried))
+        # The sooner the records come, the fewer visits are wasted.
+        # For the 99 percent mark a few centuries make no difference;
+        # thousands of years do. (The very last system is a matter of
+        # chance in the runs behind the table: it comes no sooner with
+        # records by beam than with records a few centuries late.)
+        wasted = [r["still"]["wasted_visit_share"]
+                  for r in (base, prompt, carried)]
+        self.assertEqual(wasted, sorted(wasted))
+        marks = [r["milestones"][2]["years"] for r in (base, prompt, carried)]
+        self.assertAlmostEqual(marks[0], marks[1], delta=5.0)
+        self.assertLess(marks[1] + 50.0, marks[2])
         self.assertIsNone(none["still"]["records_late_share_times"])
         self.assertTrue(none["still"]["last_stands_for_9999"])
         text = " ".join(pp.render_report(none).split())
         self.assertIn("The 100% mark is the one for 99.99%", text)
         self.assertIn("no records of their work ever reach it", text)
+        self.assertIn("no messages are sent", text)
+        # Without archives the beams between probes still carry the
+        # records of the probes around, which is all the survey needs.
+        beamed = pp.derive(pp.Scenario(archives="none"))
+        self.assertEqual(beamed["still"]["records_late_share_times"], 0.0)
+        self.assertAlmostEqual(survey(beamed), survey(base), delta=1.0)
+        self.assertIn("no shared archives: a probe hears of the work of "
+                      "the probes around it by beam",
+                      " ".join(pp.render_report(beamed).split()))
+        self.assertEqual(beamed["comms"]["link_copies"], 6)
         # Whatever a probe knows, the mission stays within three percent:
         # the scattering phase is nearly all of it.
-        for r in (sure, blind, prompt, none):
+        for r in (sure, blind, carried, prompt, none, beamed):
             self.assertAlmostEqual(r["total_years"] / base["total_years"],
                                    1.0, delta=0.03)
 
@@ -3066,8 +3140,25 @@ class TestStillField(unittest.TestCase):
                        "(plan0_sim.py)",
                        "The stars stand still while this survey lasts",
                        "it is taken to foresee 95% of the others' choices",
-                       "what one probe needs for its share"]:
+                       "records of their work reach it by beam, at the "
+                       "speed of light",
+                       "a probe hears of the work of the probes around it "
+                       "by beam, after the light time from one probe to "
+                       "the next, 25.8 years",
+                       "between records sent to the station",
+                       "A probe beams the record of every system it "
+                       "finishes to the 6 probes around it and to its "
+                       "nearest archive station",
+                       "every message sent 7 times"]:
             self.assertIn(phrase, text)
+        carried = " ".join(pp.render_report(pp.derive(pp.Scenario(
+            neighbor_beams=False))).split())
+        for phrase in ["what one probe needs for its share",
+                       "between deposits of finished work",
+                       "Between two archive stations the link budget "
+                       "gives"]:
+            self.assertIn(phrase, carried)
+        self.assertNotIn("by beam", carried)
         self.assertNotIn("the estimate sits at its ceiling", text)
         self.assertEqual(banned_tokens(text), [])
         explain = pp.render_explain(pp.derive(pp.Scenario()))
@@ -3145,7 +3236,7 @@ class TestStarts(unittest.TestCase):
                                / scattered["phases"]["survey_work_years"],
                                1.0, delta=0.002)
         self.assertLess(even["phases"]["duplicated_work_years"],
-                        0.5 * scattered["phases"]["duplicated_work_years"])
+                        scattered["phases"]["duplicated_work_years"])
         # Each run says what the other way of starting would give.
         for one, other in ((even, scattered), (scattered, even)):
             told = one["still"]["other_starts"]
@@ -3158,7 +3249,7 @@ class TestStarts(unittest.TestCase):
         self.assertIn("The starting points are taken as drawn at random. "
                       "Spread evenly, one probe to a region of its own, as "
                       "Physical Layer 4.5 has it, 99% of the systems would "
-                      "be done 6.9 thousand years into the survey", text)
+                      "be done 6.8 thousand years into the survey", text)
         self.assertIn("The starting points fall at random, so the shares "
                       "are uneven", text)
         self.assertEqual(banned_tokens(text), [])
@@ -3177,6 +3268,97 @@ class TestStarts(unittest.TestCase):
                                  for note in r["unused_inputs"]])
         self.assertEqual(
             pp.derive(pp.Scenario(strategy="regions"))["unused_inputs"], [])
+
+
+class TestBeamsAndBoxes(unittest.TestCase):
+    """How records travel in the Physical Layer: a box in the surveyed
+    system (section 3.1), and a beam to the probes around and to the
+    nearest archive station (sections 2.2 and 4.2)."""
+
+    def test_defaults(self):
+        self.assertTrue(pp.Scenario().neighbor_beams)
+        self.assertTrue(parse([]).neighbor_beams)
+        self.assertFalse(parse(["--no-neighbor-beams"]).neighbor_beams)
+        for bad in ("yes", 1, None):
+            with self.assertRaises(ValueError):
+                pp.derive(pp.Scenario(neighbor_beams=bad))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "carried.json")
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump({"neighbor_beams": False}, fh)
+            self.assertFalse(parse(["--scenario", path]).neighbor_beams)
+        help_text = " ".join(pp.build_parser().format_help().split())
+        self.assertIn("--no-neighbor-beams", help_text)
+        self.assertIn("an unattended deposit box in every surveyed system, "
+                      "which costs no side trip", help_text)
+
+    def test_a_box_in_the_surveyed_system_costs_no_side_trip(self):
+        r = pp.derive(pp.Scenario())
+        self.assertEqual(r["layout"]["detour_kpc"], 0.0)
+        self.assertEqual(r["phases"]["archive_detours_years"], 0.0)
+        self.assertEqual(r["distance"]["detour_m"], 0.0)
+        # the mission ends with the last system
+        self.assertAlmostEqual(r["milestones"][-1]["years"],
+                               r["total_years"])
+        # a box ten parsecs off the route: one side trip, at the end
+        off = pp.derive(pp.Scenario(detour_kpc=0.01))
+        self.assertAlmostEqual(off["phases"]["archive_detours_years"], 652,
+                               delta=1)
+        self.assertAlmostEqual(off["total_years"] - r["total_years"],
+                               off["phases"]["archive_detours_years"])
+
+    def test_one_message_per_system_to_the_probes_around(self):
+        r = pp.derive(pp.Scenario())
+        c, g = r["comms"], r["geometry"]
+        self.assertEqual(c["link_kind"], "probes")
+        self.assertEqual(c["messages_per_probe"], r["visited_per_probe"])
+        self.assertEqual(c["fleet_messages"], 1e11)
+        self.assertAlmostEqual(c["link_distance_m"],
+                               g["spacing_kpc"] * pp.KPC_M)
+        # The budget is for 2.4e17 meters; the probes of the plan lie
+        # 2.44e17 apart, so the rate is three percent below it.
+        self.assertAlmostEqual(c["link_rate_bps"],
+                               0.5 * (pp.BUDGET_SPACING_M
+                                      / c["link_distance_m"]) ** 2)
+        self.assertAlmostEqual(c["link_rate_bps"] / 0.5, 0.967, delta=0.001)
+        self.assertEqual(c["link_copies"], 7)     # six probes, one station
+        self.assertAlmostEqual(
+            c["link_years_per_probe"] * pp.YEAR_S,
+            100 * 7 * 500 * 8 / c["link_rate_bps"])
+        self.assertLess(c["link_years_per_probe"], 1.0)
+        # A sparser fleet has weaker links between its probes.
+        fewer = pp.derive(pp.Scenario(probes=10 ** 8))["comms"]
+        self.assertLess(fewer["link_rate_bps"], 0.25 * c["link_rate_bps"])
+        # Carried records: one message per region, between stations.
+        carried = pp.derive(pp.Scenario(neighbor_beams=False))["comms"]
+        self.assertEqual(carried["link_kind"], "stations")
+        self.assertEqual(carried["messages_per_probe"], 1.0)
+        self.assertEqual(carried["link_copies"], 1)
+
+    def test_the_archives_hear_of_every_system_as_it_is_done(self):
+        beamed = pp.derive(pp.Scenario())
+        parts = beamed["staleness_parts_years"]
+        self.assertAlmostEqual(parts["deposit_interval"],
+                               beamed["per_system_years"])
+        self.assertAlmostEqual(parts["reading_interval"],
+                               beamed["per_system_years"])
+        self.assertAlmostEqual(beamed["staleness_years"], 10_394, delta=5)
+        carried = pp.derive(pp.Scenario(neighbor_beams=False))
+        self.assertAlmostEqual(
+            carried["staleness_parts_years"]["deposit_interval"],
+            carried["phases"]["survey_work_years"])
+        self.assertGreater(carried["staleness_years"], 23_000)
+
+    def test_where_the_switch_does_nothing(self):
+        r = pp.derive(pp.Scenario(strategy="regions", neighbor_beams=False))
+        self.assertEqual([note["input"] for note in r["unused_inputs"]],
+                         ["neighbor_beams"])
+        self.assertEqual(pp.derive(pp.Scenario(
+            neighbor_beams=False))["unused_inputs"], [])
+        self.assertEqual(pp.derive(pp.Scenario(
+            neighbors=4))["unused_inputs"], [])
+        self.assertEqual(pp.derive(pp.Scenario(neighbors=4))["comms"]
+                         ["link_copies"], 5)
 
 
 class TestLeftOut(unittest.TestCase):
