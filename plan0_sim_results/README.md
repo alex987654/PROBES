@@ -28,7 +28,7 @@ The runs themselves are stored beside it, in `results.jsonl`.
 1. **The survey is one percent of the mission.** Before any probe may
    begin, the fleet scatters across the disc for 978,000 years (Physical
    Layer section 4.5). After that, 99 percent of the systems are
-   surveyed within about 6,800 years and the last one after about 7,900.
+   surveyed within about 6,800 years and the last one after about 7,800.
    The cases below lie between 6,500 and 23,300 years, in a mission of a
    million. The simulation decides how the survey should be run, not how
    long the mission is.
@@ -72,8 +72,9 @@ surveyed:
 | own cell first | spread evenly | nothing | 7,000 |
 | own cell only | spread evenly | nothing needed | 7,000 |
 | roam from the start | at random | completion records at light speed | 6,900 |
-| own cell first | spread evenly | 95 percent worked out, no records (the plan) | 6,800 |
+| own cell first | spread evenly | 95 percent worked out, no records | 6,800 |
 | own cell first | spread evenly | completion records at light speed | 6,800 |
+| own cell first | spread evenly | 95 percent worked out, records at light speed (the plan) | 6,800 |
 | roam from the start | at random | everything worked out in advance | 6,500 |
 
 The terms are explained below.
@@ -92,8 +93,8 @@ default:
 | Distance between neighboring systems | 1.6 parsecs at the median, 2.0 on average |
 | One hop from system to system | about 50 years |
 | Scattering before the survey | 978,000 years |
-| Survey after that | about 9,000 years |
-| What a star moves in 9,000 years, against its neighbors | 0.2 to 0.5 parsecs |
+| Survey after that | about 8,000 years |
+| What a star moves in 8,000 years, against its neighbors | 0.2 to 0.5 parsecs |
 
 The last line shapes the simulation. While the survey lasts a star moves
 a fraction of one hop: the stars stand still. A system that a probe
@@ -367,6 +368,8 @@ from result 1 in the last digit.
 | everything, worked out in advance | at random | 0.49 | 0.96 | 1.16 | 1.40 | 1.69 | 0% | 7,200 |
 | completion records at light speed | spread evenly | 0.48 | 0.94 | 1.11 | 1.16 | 1.23 | 2% | 6,800 |
 | completion records at light speed | at random | 0.49 | 0.98 | 1.20 | 1.29 | 1.41 | 7% | 7,300 |
+| 95 percent worked out, records at light speed | spread evenly | 0.48 | 0.94 | 1.10 | 1.16 | 1.27 | 1% | 6,800 |
+| 95 percent worked out, records at light speed | at random | 0.49 | 0.97 | 1.16 | 1.25 | 1.40 | 2% | 7,100 |
 | 95 percent worked out, no records | spread evenly | 0.48 | 0.94 | 1.11 | 1.18 | - | 4% | 6,800 |
 | 95 percent worked out, no records | at random | 0.49 | 0.99 | 1.23 | 1.36 | - | 12% | 7,600 |
 | 95 percent worked out, records 3 share times late | spread evenly | 0.48 | 0.94 | 1.11 | 1.18 | 1.29 | 6% | 6,800 |
@@ -435,10 +438,12 @@ the visits wasted:
   What knowledge still buys is the tail: the last system comes at 1.23
   to 1.62 share times, and the visits wasted run from none to 25
   percent.
-- **The plan wastes one visit in sixteen.** With 95 percent of the
-  others' choices worked out and records three to four share times late,
-  the 99 percent mark comes at 1.11 share times and the last system at
-  1.29, against 1.23 and 1.61 for starting points drawn at random.
+- **The plan wastes one visit in a hundred.** With 95 percent of the
+  others' choices worked out and records at the speed of light, the 99
+  percent mark comes at 1.10 share times and the last system at 1.27,
+  against 1.16 and 1.40 for starting points drawn at random. With
+  records three to four share times late, which is what the archives
+  alone would deliver, one visit in sixteen is wasted (1.11 and 1.29).
 - **Lost probes undo part of the gain.** A lost probe leaves a hole in
   the lattice. With a tenth of the fleet lost the 99 percent mark comes
   at 1.31 share times with records, against 1.34 for random starts; with
@@ -456,7 +461,9 @@ from the moment the survey starts.
 
 | Case (own cell first and starts at random unless named) | Half of the systems | 99 percent | 99.9 percent | Last system |
 | --- | --- | --- | --- | --- |
-| the plan: starts spread evenly, 95 percent foresight, records too late to matter | 3,000 | 6,800 | 7,300 | 7,900 |
+| the plan: starts spread evenly, 95 percent foresight, records at light speed | 3,000 | 6,800 | 7,100 | 7,800 |
+| the same with starts at random | 3,000 | 7,100 | 7,700 | 8,600 |
+| starts spread evenly, 95 percent foresight, records too late to matter | 3,000 | 6,800 | 7,300 | 7,900 |
 | the same with starts at random | 3,000 | 7,600 | 8,400 | 9,900 |
 | records at light speed, no foresight | 3,000 | 7,400 | 8,000 | 8,500 |
 | everything worked out in advance | 3,000 | 7,100 | 8,900 | 11,400 |
@@ -483,24 +490,29 @@ stars that do not mix while the survey lasts: 98.7 percent for a billion
 probes, nil for ten thousand.
 
 By default the calculator takes probes that start spread evenly, are
-right about 95 percent of the others' choices and clear their own cell
-first. Under its default layout of archives a record reaches the next
-probe 3.9 share times after the event, which is after the survey has
-ended, so records play no part in it. The result, and the same for
-starting points drawn at random (`--starts random`):
+right about 95 percent of the others' choices, clear their own cell
+first and hear of the work of the probes around them by beam, at the
+speed of light (Physical Layer sections 2.2 and 4.2). A probe leaves
+its records in a box in the system it has surveyed, so the mission ends
+with the last system. The result, and the same for starting points
+drawn at random (`--starts random`):
 
 | | Years after departure | Years after the survey starts | The same, starts at random |
 | --- | --- | --- | --- |
 | Half of the systems | 981,400 | 3,000 | 3,000 |
-| 90 percent | 984,300 | 5,800 | 6,100 |
-| 99 percent | 985,400 | 6,900 | 7,700 |
-| Every system | 986,500 | 8,000 | 10,000 |
-| Records deposited: the end of the mission | 987,200 | 8,700 | 10,600 |
+| 90 percent | 984,300 | 5,800 | 6,000 |
+| 99 percent | 985,300 | 6,800 | 7,200 |
+| Every system: the end of the mission | 986,400 | 7,900 | 8,700 |
 
-The calculator gives 6,900 years for the 99 percent mark where the table
-of the previous section gives 6,800. It counts travel and stays
-separately, at the mean spacing of the galaxy model, and keeps a weight
-of 1.3 percent for the laws of stars that mix.
+The calculator's figures differ from those of the previous section by up
+to a hundred years. It counts travel and stays separately, at the mean
+spacing of the galaxy model, and keeps a weight of 1.3 percent for the
+laws of stars that mix.
+
+With `--no-neighbor-beams` the records go through the archives alone.
+They then reach the next probe 3.9 share times after the event, which is
+after the survey has ended, so they play no part in it: 99 percent of
+the systems after 6,900 years and the last after 8,000.
 
 **In the specification.** Three of its rules rest on these results.
 
@@ -523,7 +535,10 @@ of 1.3 percent for the laws of stars that mix.
   systems, which is an extreme of a kind no box contains; the 99.9
   percent mark is the last one to lean on.
 - Records are heard by every probe at the speed of light, as if
-  broadcast. That is the most that messages could do.
+  broadcast. That is the most that messages could do. The specification
+  relays a record over two hops at most, about two probe spacings
+  (Physical Layer section 4.3). The probes that could go to the same
+  system lie within that range, but the limit itself was not simulated.
 - Foresight is a fixed share of the others' choices, known at once; the
   rest is never known unless a record comes. In a real fleet the doubt
   about another probe's choices would grow with time. The runs do not
