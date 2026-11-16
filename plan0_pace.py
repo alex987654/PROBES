@@ -136,7 +136,6 @@ RADIAL_RANDOM_SPEED_M_S = 3.5e4
 # per year on 6.08e10 (Licquia and Newman 2015). A share, so that it holds
 # for any system count.
 STAR_FORMATION_SHARE_PER_YEAR = 2.71e-11
-STORED_ENERGY_LEG_YEARS = 1.0e4         # cruise leg named in section 6.1
 # Simulated: 10,000 seeds scattered at random through a uniform disc, each
 # probe keeping to the systems nearest its seed, no work handed over.
 UNBALANCED_DONE_AT_NOMINAL_TIME = 0.79
@@ -247,6 +246,7 @@ _NUMBER_RULES = {
     "refuel_years_per_mass": (0, True, None, False),
     "region_systems": (0, False, None, False),
     "dispersal_leg_kpc": (0, True, None, False),
+    "dispersal_stop_years": (0, False, None, False),
     "envelope_factor": (0, False, None, False),
     "bitrate_bps": (0, False, None, False),
     "message_bytes": (0, False, None, False),
@@ -328,6 +328,11 @@ class Scenario:
     # holds for every starting point is the disc diameter, so that is the
     # default (None). A shorter leg presumes knowledge of the start.
     dispersal_leg_kpc: Optional[float] = None
+    # Years of cruise between two refuelling stops on the way there
+    # (Physical Layer section 6.1: one stop per ten thousand years). The
+    # stops are part of the wait, each as long as a stay at a surveyed
+    # system.
+    dispersal_stop_years: float = 10_000.0
     envelope_factor: float = 1.0         # extra margin on that allowance
     bitrate_bps: float = 0.5             # optical link; section 2.2 (0.1-1)
     message_bytes: float = 500.0         # wire-form message; Wire Format s.9
@@ -582,6 +587,10 @@ INPUT_TABLE = [
      "the disc diameter unless given: the longest leg possible from any "
      "starting point, so the wait does not depend on where the fleet "
      "starts (Physical Layer section 4.5)"),
+    ("dispersal_stop_years", None, None, None, False,
+     "Physical Layer section 6.1: one refuelling stop per ten thousand "
+     "years of cruise on the way to the starting point; the wait counts "
+     "them (section 4.5)"),
     ("envelope_factor", None, None, None, False,
      "no extra margin is needed on the longest possible leg"),
     ("bitrate_bps", 0.1, 1.0, "log", False,
@@ -1939,8 +1948,7 @@ def central_load_factor(sc: Scenario, gal: dict) -> float:
 
 
 def left_out(sc: Scenario, gal: dict, nominal_years: float,
-             region_cycle_years: float, side_pc: float,
-             stay_years: float, dispersal_years: float) -> dict:
+             region_cycle_years: float, side_pc: float) -> dict:
     """Sizes of the effects the model does not follow, for the caveats.
     `side_pc` is the size of one region."""
     half_radius_m = sc.disc_radius_kpc / 2.0 * KPC_M
@@ -1949,7 +1957,6 @@ def left_out(sc: Scenario, gal: dict, nominal_years: float,
     for speed in RANDOM_SPEEDS_M_S:
         moved_pc = speed * region_cycle_years * YEAR_S / PARSEC_M
         drift.append(share_leaving_cube(moved_pc / side_pc))
-    stops = dispersal_years / STORED_ENERGY_LEG_YEARS
     return dict(
         turns_at_half_radius=nominal_years / turn_years,
         turn_years=turn_years,
@@ -1960,9 +1967,7 @@ def left_out(sc: Scenario, gal: dict, nominal_years: float,
         region_side_parsec=side_pc,
         drift_out_shares=drift,
         new_system_share=STAR_FORMATION_SHARE_PER_YEAR * nominal_years,
-        central_load_factor=central_load_factor(sc, gal),
-        scattering_stops=stops,
-        scattering_stop_years=stops * stay_years)
+        central_load_factor=central_load_factor(sc, gal))
 
 
 def _unused_inputs(sc: Scenario, layout: dict, gal: dict) -> list:
@@ -2260,11 +2265,20 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
 
     # Phases ----------------------------------------------------------------
     # Scattering: every probe waits out the same allowance before the
-    # survey starts fleet-wide, however short its own leg was.
+    # survey starts fleet-wide, however short its own leg was. The
+    # allowance is the time of the longest leg with its refuelling stops
+    # (Physical Layer sections 4.5 and 6.1): one stop per so many years of
+    # cruise, each as long as a stay at a surveyed system and each with
+    # one braking and one start of its own.
     diameter_kpc = 2.0 * sc.disc_radius_kpc
     leg_kpc = (diameter_kpc if sc.dispersal_leg_kpc is None
                else sc.dispersal_leg_kpc)
-    dispersal_s = leg_seconds(leg_kpc * KPC_M, v, accel) * sc.envelope_factor
+    dispersal_cruise_s = leg_seconds(leg_kpc * KPC_M, v, accel)
+    dispersal_stops = (leg_kpc * KPC_M / v / YEAR_S
+                       / sc.dispersal_stop_years)
+    dispersal_stop_s = dwell_s + (0.0 if accel is None else v / accel)
+    dispersal_s = ((dispersal_cruise_s + dispersal_stops * dispersal_stop_s)
+                   * sc.envelope_factor)
     still = None
     uneven_s = 0.0
     if by_system:
@@ -2590,6 +2604,11 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
         dispersal=dict(
             leg_kpc=leg_kpc, diameter_kpc=diameter_kpc,
             allowance_kpc=leg_kpc * sc.envelope_factor,
+            # the refuelling stops of that leg, which the wait counts
+            cruise_years=dispersal_cruise_s / YEAR_S,
+            stops=dispersal_stops,
+            stop_years=dispersal_stop_s / YEAR_S,
+            stops_years=dispersal_stops * dispersal_stop_s / YEAR_S,
             # False when the allowance is shorter than the longest leg a
             # start at the rim would need: it then depends on the start.
             covers_any_start=(leg_kpc * sc.envelope_factor
@@ -2651,8 +2670,7 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
         if detail and _compare else None,
         left_out=left_out(
             sc, gal, (dispersal_s + survey_s) / YEAR_S, t_region_s / YEAR_S,
-            region_side_pc, dwell_s / YEAR_S,
-            dispersal_s / YEAR_S) if detail else None,
+            region_side_pc) if detail else None,
         distance=dict(
             dispersal_m=dispersal_m,
             survey_path_m=survey_path_m,
@@ -3421,13 +3439,16 @@ def describe_left_out(r: dict, canonical: bool = False) -> list:
             "%s to %s of the systems in a volume of that size." % drift)
     deep += (" About %s as many systems as are counted today form during "
              "the survey." % percent(out["new_system_share"]))
+    way = r["dispersal"]
     scattering = (
-        "Scattering. Counted as one uninterrupted cruise, although "
-        "Physical Layer 6.1 has probes refuel at stars. A stop every %s "
-        "would add about %s stays, %s in all."
-        % (fmt_duration(STORED_ENERGY_LEG_YEARS, canonical, 1),
-           sig(out["scattering_stops"], 2),
-           fmt_duration(out["scattering_stop_years"], canonical)))
+        "Scattering. The wait covers the longest leg with its refuelling "
+        "stops (Physical Layer 4.5 and 6.1): one stop per %s of cruise, "
+        "about %s stops, %s in all. A stop is taken to last as long as "
+        "the stay at a surveyed system, %s; nothing is recorded there."
+        % (fmt_duration(r["scenario"]["dispersal_stop_years"], canonical, 1),
+           sig(way["stops"], 2),
+           fmt_duration(way["stops_years"], canonical),
+           fmt_duration(way["stop_years"], canonical, 3)))
     lines = []
     for text in (balance, duplication, deep, scattering):
         lines += fill(text)
@@ -3499,6 +3520,13 @@ def describe_propellant(r: dict, canonical: bool = False) -> list:
         text += ("; a faster cruise is therefore optimistic "
                  "(--refuel-years)."
                  if p["mass_ratio_per_stop"] > 10 else " (--refuel-years).")
+    stops = r["dispersal"]["stops"]
+    if stops >= 1.0:
+        text += (" Each refuelling stop on the way to the starting point "
+                 "costs the same: up to %s of them, another %s c for the "
+                 "probe with the longest way."
+                 % (sig(stops, 2),
+                    human_count(stops * p["velocity_change_per_stop_c"], 2)))
     return fill(text)
 
 
@@ -4168,11 +4196,15 @@ def render_explain(r: dict) -> str:
     lines += [
         "duplicated work = %.4g years" % ph["duplicated_work_years"],
         "",
-        "scattering = allowed leg x margin / v",
-        "  = %.4g kiloparsecs%s x %.3g / v = %.4g years"
+        "scattering = (allowed leg / v + refuelling stops x stay) x margin",
+        "  = (%.4g kiloparsecs%s / v + %.4g x %.4g years) x %.3g = %.4g "
+        "years"
         % (r["dispersal"]["leg_kpc"],
            " (the disc diameter)" if sc["dispersal_leg_kpc"] is None else "",
+           r["dispersal"]["stops"], r["dispersal"]["stop_years"],
            sc["envelope_factor"], ph["dispersal_years"]),
+        "  refuelling stops = years of cruise / %.4g"
+        % sc["dispersal_stop_years"],
         "archive detours = deposits x 2 x detour distance / v = %.4g years"
         % ph["archive_detours_years"],
         "",
@@ -4431,10 +4463,17 @@ def build_parser() -> argparse.ArgumentParser:
                         "is the disc diameter, the longest leg possible "
                         "from any starting point, so that the wait does "
                         "not depend on where the fleet starts")
+    g.add_argument("--dispersal-stop-years", type=float, metavar="YEARS",
+                   dest="dispersal_stop_years",
+                   help="years of cruise between two refuelling stops on "
+                        "the way to the starting point (default 10000, as "
+                        "the specification has it); the wait before the "
+                        "survey counts these stops, each as long as the "
+                        "stay at a surveyed system")
     g.add_argument("--envelope-factor", type=float, metavar="NUMBER",
                    dest="envelope_factor",
-                   help="margin multiplier on the scattering distance "
-                        "(default 1.0, since the default distance is "
+                   help="margin multiplier on the scattering allowance "
+                        "(default 1.0, since the default allowance is "
                         "already the longest possible)")
     g.add_argument("--attrition", type=float, metavar="NUMBER",
                    dest="attrition_per_year",

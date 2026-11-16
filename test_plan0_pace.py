@@ -109,6 +109,11 @@ class TestModel(unittest.TestCase):
         # in a box in the surveyed system (section 3.1), where they made a
         # side trip of ten parsecs. The survey after the scattering is
         # 7,900 years where it was 10,600.
+        #
+        # Then it moved up by a thousand years, to 987: the wait before
+        # the survey counts the refuelling stops of the longest leg, one
+        # per ten thousand years of cruise (sections 4.5 and 6.1), where
+        # it was the bare cruise of 978,469 years.
         r = pp.derive(pp.Scenario())
         self.assertEqual(r["scenario"]["probes"], 10 ** 9)
         self.assertEqual(r["strategy"], "systems")
@@ -119,13 +124,15 @@ class TestModel(unittest.TestCase):
         self.assertLess(r["total_years"], 1.05e6)
         self.assertTrue(r["scenario"]["neighbor_beams"])
         self.assertEqual(r["layout"]["detour_kpc"], 0.0)
-        self.assertAlmostEqual(r["total_years"] / 986.4e3, 1.0, delta=0.0005)
+        self.assertAlmostEqual(r["total_years"] / 987.4e3, 1.0, delta=0.0005)
         self.assertAlmostEqual(
             pp.derive(pp.Scenario(starts="random", neighbor_beams=False,
-                                  detour_kpc=0.01))["total_years"] / 989.1e3,
+                                  detour_kpc=0.01))["total_years"] / 990.1e3,
             1.0, delta=0.0005)
-        self.assertAlmostEqual(r["phases"]["dispersal_years"] / 9.785e5, 1.0,
+        self.assertAlmostEqual(r["phases"]["dispersal_years"] / 9.794e5, 1.0,
                                places=3)
+        self.assertAlmostEqual(r["dispersal"]["stops_years"], 978.5,
+                               places=1)
         self.assertGreater(r["phases"]["dispersal_years"]
                            / r["total_years"], 0.95)
         # A fleet of ten thousand probes: 0.75 billion years at the same
@@ -302,7 +309,10 @@ class TestIdentities(unittest.TestCase):
         region_cycle = 1000.0 * per_system
         staleness = region_cycle + 1e4 + 270.0 * parsec / light_year
         duplication = staleness / region_cycle * 6 / (per_probe / 1000.0)
-        dispersal = 10_000.0 * parsec / speed / year * 1.5
+        cruise = 10_000.0 * parsec / speed / year
+        # one refuelling stop of ten years per ten thousand years of
+        # cruise: 650 years on this leg, which the audited figure lacked
+        dispersal = (cruise + cruise / 1e4 * 10.0) * 1.5
         detours = (per_probe / 1000.0) * 2 * 10.0 * parsec / speed / year
         total = dispersal + work * (1 + duplication) + detours
         self.assertAlmostEqual(r["hop_years"] / hop_years, 1.0, places=12)
@@ -1391,9 +1401,15 @@ class TestStopAndGo(unittest.TestCase):
         sc = ten_thousand(acceleration_m_s2=0.05, archives="stations-only")
         r = pp.derive(sc)
         v = sc.speed_c * pp.C_M_PER_S
+        cruise = pp.leg_seconds(30 * pp.KPC_M, v, 0.05) / pp.YEAR_S
+        self.assertAlmostEqual(r["dispersal"]["cruise_years"], cruise)
+        # every refuelling stop on the way adds its stay and one more
+        # braking and start, 19 years at this acceleration
+        ramp = v / 0.05 / pp.YEAR_S
+        self.assertAlmostEqual(r["dispersal"]["stop_years"], 10.0 + ramp)
         self.assertAlmostEqual(
             r["phases"]["dispersal_years"],
-            pp.leg_seconds(30 * pp.KPC_M, v, 0.05) / pp.YEAR_S)
+            cruise + r["dispersal"]["stops"] * (10.0 + ramp))
         deposits = r["regions_per_probe"] / r["layout"]["deposit_every"]
         self.assertAlmostEqual(
             r["phases"]["archive_detours_years"]
@@ -2950,18 +2966,18 @@ class TestStillField(unittest.TestCase):
         self.assertTrue(pp.derive(pp.Scenario())["still"]["records_by_beam"])
         for inputs, pinned in (
                 (dict(), dict(wasted=0.0099, half=2962, most=6839, last=7934,
-                              total=986_403)),
+                              total=987_381)),
                 (dict(starts="random"),
                  dict(wasted=0.0209, half=3032, most=7196, last=8693,
-                      total=987_162)),
+                      total=988_140)),
                 # records through the archives, as the model had them
                 (dict(neighbor_beams=False),
                  dict(wasted=0.0635, half=2962, most=6911, last=8045,
-                      total=986_515)),
+                      total=987_493)),
                 (dict(starts="random", neighbor_beams=False,
                       detour_kpc=0.01),
                  dict(wasted=0.1609, half=3034, most=7658, last=9995,
-                      total=989_116))):
+                      total=990_095))):
             with self.subTest(inputs=inputs):
                 self.check_the_plan(pp.derive(pp.Scenario(**inputs)),
                                     **pinned)
@@ -3429,12 +3445,21 @@ class TestLeftOut(unittest.TestCase):
         self.assertGreater(with_bulge["central_load_factor"], expected)
 
     def test_scattering_stops(self):
-        r = pp.derive(ten_thousand())
-        out = r["left_out"]
-        self.assertAlmostEqual(out["scattering_stops"],
-                               r["phases"]["dispersal_years"] / 1e4)
-        self.assertAlmostEqual(out["scattering_stop_years"],
-                               out["scattering_stops"] * 10.0)
+        # The stops on the way are counted in the wait, and the caveat
+        # says what they are taken to be.
+        r = pp.derive(pp.Scenario())
+        way = r["dispersal"]
+        self.assertAlmostEqual(way["stops"], way["cruise_years"] / 1e4)
+        self.assertAlmostEqual(way["stops_years"], way["stops"] * 10.0)
+        self.assertAlmostEqual(r["phases"]["dispersal_years"],
+                               way["cruise_years"] + way["stops_years"])
+        text = " ".join(pp.render_report(r).split())
+        self.assertIn("Scattering. The wait covers the longest leg with "
+                      "its refuelling stops (Physical Layer 4.5 and 6.1): "
+                      "one stop per 10 thousand years of cruise, about 98 "
+                      "stops, 980 years in all.", text)
+        self.assertIn("up to 98 of them, another 20 c for the probe with "
+                      "the longest way", text)
 
     def test_caveats_name_each_effect_with_its_size(self):
         r = pp.derive(by_region())
@@ -3662,16 +3687,34 @@ class TestScattering(unittest.TestCase):
             sc = ten_thousand(**kwargs)
             r = pp.derive(sc)
             diameter_m = 2 * sc.disc_radius_kpc * pp.KPC_M
+            cruise = diameter_m / (sc.speed_c * pp.C_M_PER_S) / pp.YEAR_S
+            self.assertAlmostEqual(r["dispersal"]["cruise_years"] / cruise,
+                                   1.0, places=12)
+            # one stop of ten years per ten thousand years of cruise
             self.assertAlmostEqual(
-                r["phases"]["dispersal_years"]
-                / (diameter_m / (sc.speed_c * pp.C_M_PER_S) / pp.YEAR_S),
-                1.0, places=12)
+                r["phases"]["dispersal_years"] / (cruise * 1.001), 1.0,
+                places=12)
             self.assertTrue(r["dispersal"]["covers_any_start"])
             self.assertEqual(r["distance"]["dispersal_m"], diameter_m)
-        # 30 kiloparsecs at 0.1 of light speed: 978 thousand years.
+        # 30 kiloparsecs at 0.1 of light speed: 978 thousand years of
+        # cruise and 98 stops, 979 thousand years in all.
+        r = pp.derive(ten_thousand())
+        self.assertAlmostEqual(r["dispersal"]["cruise_years"] / 9.785e5, 1.0,
+                               places=3)
+        self.assertAlmostEqual(r["dispersal"]["stops"], 97.85, places=2)
+        self.assertAlmostEqual(r["phases"]["dispersal_years"] / 9.794e5, 1.0,
+                               places=3)
+        # The stops can be spaced otherwise, or all but left out.
         self.assertAlmostEqual(
-            pp.derive(ten_thousand())["phases"]["dispersal_years"] / 9.785e5,
-            1.0, places=3)
+            pp.derive(ten_thousand(dispersal_stop_years=1e3))
+            ["dispersal"]["stops"], 978.5, places=1)
+        self.assertAlmostEqual(
+            pp.derive(ten_thousand(dispersal_stop_years=1e12))
+            ["phases"]["dispersal_years"] / 9.785e5, 1.0, places=3)
+        with self.assertRaises(ValueError):
+            pp.derive(ten_thousand(dispersal_stop_years=0.0))
+        self.assertEqual(parse(["--dispersal-stop-years", "5000"])
+                         .dispersal_stop_years, 5000.0)
 
     def test_it_covers_the_longest_leg_from_any_starting_radius(self):
         # From a start at radius r the farthest seed is at radius + r on
@@ -3695,8 +3738,11 @@ class TestScattering(unittest.TestCase):
     def test_explicit_leg_and_margin_keep_working(self):
         r = pp.derive(ten_thousand(dispersal_leg_kpc=10.0,
                                   envelope_factor=1.5, speed_c=0.05))
-        # The figure the audit reproduced: 978 thousand years.
-        self.assertAlmostEqual(r["phases"]["dispersal_years"] / 9.785e5, 1.0,
+        # The figure the audit reproduced, 978 thousand years, and the
+        # stops of that leg.
+        self.assertAlmostEqual(r["dispersal"]["cruise_years"] * 1.5 / 9.785e5,
+                               1.0, places=3)
+        self.assertAlmostEqual(r["phases"]["dispersal_years"] / 9.794e5, 1.0,
                                places=3)
         wide = pp.derive(ten_thousand(envelope_factor=2.0))
         self.assertAlmostEqual(
