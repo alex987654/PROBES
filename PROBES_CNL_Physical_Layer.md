@@ -26,8 +26,9 @@ companion `PROBES_CNL_Transport_Layer.md`.*
 | Fleet-crossing light time | ~10⁵ years | no fact reaches the whole fleet while the survey lasts |
 
 **The controlling fact: every exchange is a monologue.** With
-century-scale one-way latency, there are no handshakes, no
-acknowledgments, no retransmission requests, no negotiation.
+one-way latency of decades to a neighbor and centuries to a
+node, there are no handshakes, no acknowledgments, no
+retransmission requests, no negotiation.
 Every message must be complete, self-contained, and
 self-describing on arrival — which is precisely the design
 posture PROBES CNL inherited from BEYOND, now revealed as a
@@ -55,15 +56,20 @@ laser-link scaling to interstellar ranges was studied in the
 historically discussed literature on beamed-sail probe concepts.
 An order-of-magnitude budget for neighbor-to-neighbor contact:
 
-- 10 m transmit and receive apertures, 1 kW at ~1 μm
-- diffraction-limited divergence θ ≈ λ/D ≈ 10⁻⁷ rad
-- spot radius at 8×10¹⁸ m ≈ 8×10¹¹ m
-- captured fraction ≈ (5 m / 8×10¹¹ m)² ≈ 4×10⁻²³
-- received power ≈ 4×10⁻²⁰ W ≈ 0.2 photons per second
+- 1.7 m transmit and receive apertures, 1 kW at ~1 μm
+- diffraction-limited divergence θ ≈ λ/D ≈ 6×10⁻⁷ rad
+- spot radius at 2.4×10¹⁷ m ≈ 1.4×10¹¹ m
+- on-axis captured fraction (π·D_t·D_r / 4λd)² ≈ 9×10⁻²³
+- received power ≈ 9×10⁻²⁰ W ≈ 0.4 photons per second
 
-With photon-starved pulse-position modulation, that supports
-**of order 0.1–1 bit per second, best case, between mutually
-known endpoints** — before pointing losses.
+With photon-starved pulse-position modulation — at most 8 bits
+per detected photon in the 256-slot format, before coding
+overhead — that supports **of order 0.1–1 bit per second, best
+case, between mutually known endpoints** — before pointing
+losses. The rate goes as (D_t·D_r / d)². A custodial node lies
+≈ 5 spacings from a probe and ≈ 10 from the next node (§3.2);
+with 10 m apertures at the nodes, both of those links hold
+about the same rate or better.
 
 Two conclusions fall straight out:
 
@@ -74,11 +80,13 @@ Two conclusions fall straight out:
    from `PROC-1` the star at which a neighbor will be. Nodes
    are not at rest: they share the motion of their host stars,
    tens of kilometers per second relative to one another.
-   Across the ≈ 26-year light time of one spacing, a transverse
-   30 km/s amounts to ≈ 160 astronomical units, a thousand beam
-   radii, so pointing ahead needs relative velocities to
-   ≈ 30 m/s — a `CAT-CCH` entry, refined at every consolidation
-   cycle.
+   Across the ≈ 260-year light time between two nodes, a
+   transverse 30 km/s amounts to ≈ 1,600 astronomical units, a
+   thousand radii of a node's beam, so pointing ahead needs
+   relative velocities to ≈ 30 m/s — a `CAT-CCH` entry, refined
+   at every consolidation cycle. A probe's beam is six times as
+   wide and needs the velocity of the star at which its
+   neighbor stops to ≈ 180 m/s — a `CAT-TGT` entry (CONS-4).
 2. **The wire form is not an optimization; it is the channel's
    admission ticket.** At bits per second, a 500-byte PROBES-W
    survey message costs about an hour of link time; the same
@@ -141,9 +149,13 @@ manifest register, and templates.
    weak fields; nodes avoid close orbits of massive or compact
    objects so local clock offsets stay inside the timing-model
    budget (`PROC-NAV`).
-6. **Graph placement.** Node spacing tracks probe spacing s so
-   the relay analysis of §4 holds; shard hosts ≥ 2 graph edges
-   apart (Transport §6).
+6. **Graph placement.** ≈ 10⁶ custodial nodes, one to ≈ 10³
+   probes: node spacing ≈ 10 s ≈ 80 pc, within the reach of the
+   link budget for a probe's beam and for the next node's
+   (§2.2). The nodes keep the archive and do not steer the
+   survey (§1), so their number follows from link range and
+   from the safe keeping of the records, not from the probe
+   spacing; shard hosts ≥ 2 graph edges apart (Transport §6).
 
 Net result: the engineering optimum is the calm mid-disc
 annulus between spiral arms — old stars, low supernova rate,
