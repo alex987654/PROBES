@@ -1114,12 +1114,57 @@ class TestFleetGeometry(unittest.TestCase):
             speed_c=0.05, consolidation_years=40_000.0))["geometry"]
         self.assertEqual(slow_cycle["useful_relay_hops"], [2, 4])
 
-    def test_station_layouts_follow_the_probe_spacing(self):
+    def test_station_layouts_follow_the_doctrine(self):
+        # Physical Layer 3.2, criterion 6: about a million custodial
+        # nodes, 80 parsecs apart, ten probe spacings. A fleet smaller
+        # than that has one station per probe.
         for probes in (10_000, 100):
             for name in ("full-network", "stations-only"):
                 r = pp.derive(ten_thousand(archives=name, probes=probes))
                 self.assertAlmostEqual(r["layout"]["cache_spacing_kpc"],
                                        r["geometry"]["spacing_kpc"])
+        for name in ("full-network", "stations-only"):
+            r = pp.derive(pp.Scenario(archives=name))
+            self.assertAlmostEqual(r["layout"]["cache_spacing_kpc"] * 1000,
+                                   79.1, delta=0.1)
+            self.assertAlmostEqual(r["layout"]["cache_spacing_kpc"]
+                                   / r["geometry"]["spacing_kpc"], 10.0,
+                                   delta=0.01)
+        million = pp.derive(pp.Scenario(probes=10 ** 6))
+        self.assertAlmostEqual(million["layout"]["cache_spacing_kpc"],
+                               million["geometry"]["spacing_kpc"])
+        more = pp.derive(pp.Scenario(probes=10 ** 7))
+        self.assertAlmostEqual(more["layout"]["cache_spacing_kpc"],
+                               million["layout"]["cache_spacing_kpc"])
+        # Between two such nodes the link gives ten times the rate of the
+        # budget: ten-meter apertures over ten probe spacings, against
+        # 1.7 meters over one (Physical Layer 2.2).
+        self.assertAlmostEqual(
+            2.44e17 * (10.0 / 1.7) ** 2 / pp.LINK_REFERENCE_M, 1.0,
+            delta=0.06)
+        c = pp.derive(pp.Scenario())["comms"]
+        self.assertAlmostEqual(c["link_rate_bps"] / 0.5, 10.7, delta=0.1)
+
+    def test_stations_fill_the_disc_like_the_probes(self):
+        # A given number of stations is spread through the disc: in one
+        # layer while they are few, through its depth where they are many.
+        few = pp.resolve_layout(pp.Scenario(station_count=100))
+        self.assertAlmostEqual(few["cache_spacing_kpc"],
+                               math.sqrt(math.pi * 15.0 ** 2 / 100))
+        many = pp.resolve_layout(pp.Scenario(station_count=10 ** 6))
+        self.assertAlmostEqual(many["cache_spacing_kpc"] * 1000, 79.1,
+                               delta=0.1)
+        self.assertAlmostEqual(many["detour_kpc"],
+                               many["cache_spacing_kpc"] / 2.0)
+        same = pp.resolve_layout(pp.Scenario(station_count=10 ** 9))
+        self.assertAlmostEqual(
+            same["cache_spacing_kpc"],
+            pp.fleet_geometry(pp.Scenario())["spacing_kpc"])
+        # A probe that carries its records to one of a million stations
+        # travels 40 parsecs each way, some 2,600 years in all.
+        r = pp.derive(pp.Scenario(station_count=10 ** 6))
+        self.assertAlmostEqual(r["phases"]["archive_detours_years"], 2580,
+                               delta=10)
         self.assertIsNone(
             pp.derive(ten_thousand(archives="none"))["layout"]
             ["cache_spacing_kpc"])

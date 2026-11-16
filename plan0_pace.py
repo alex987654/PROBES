@@ -102,9 +102,17 @@ PLANE_SWINGS_NEEDED = 4.0
 # longer result is a scale estimate and is labeled so at the headline.
 SCALE_ESTIMATE_YEARS = 1.0e8
 
-# Distance at which the link budget of Physical Layer section 2.2 holds;
-# the bit rate given for the link refers to it.
+# Distance at which two archive stations hold the rate of the link budget
+# of Physical Layer section 2.2. That budget is for two probes one probe
+# spacing apart, 2.4e17 meters, with apertures of 1.7 meters; stations
+# carry apertures of 10 meters, and the rate goes as the square of
+# (aperture x aperture / distance), which gives 2.4e17 x (10 / 1.7)^2.
 LINK_REFERENCE_M = 8.0e18
+
+# Staffed archive stations of the doctrine (Physical Layer section 3.2,
+# criterion 6): about a million, and never more than one per probe.
+DOCTRINE_STATIONS = 1.0e6
+
 
 # Figures used only to put numbers on what the model leaves out.
 ROTATION_SPEED_M_S = 2.3e5              # orbital speed, similar at all radii
@@ -134,9 +142,10 @@ REFERENCE_EXHAUST = (
 #
 # Each layout resolves to four model quantities:
 #   cache_spacing_kpc  distance between archive points a probe can reach;
-#                      None means "the mean probe spacing of this fleet",
-#                      which is what the doctrine asks for (Physical Layer
-#                      section 3.2, criterion 6)
+#                      None means the spacing of the doctrine's staffed
+#                      stations: about a million spread through the disc
+#                      (Physical Layer section 3.2, criterion 6), or one
+#                      per probe where the fleet is smaller than that
 #   detour_kpc         mean one-way off-route distance to the nearest point
 #   consolidated       whether staffed stations merge records fleet-wide
 #                      on the consolidation cycle (Physical Layer section 3.1)
@@ -157,7 +166,8 @@ ARCHIVE_PRESETS = {
               "consolidation cycle"),
         spec_note=("custodial archive nodes plus passive caches, the first "
                    "and second tiers of Physical Layer sections 3.1-3.2; "
-                   "node spacing follows the mean probe spacing"),
+                   "about a million nodes, or one per probe in a smaller "
+                   "fleet"),
     ),
     "route-boxes-only": dict(
         cache_spacing_kpc=0.10, detour_kpc=0.005, consolidated=False,
@@ -175,8 +185,8 @@ ARCHIVE_PRESETS = {
               "spiral arms; probes must detour to reach them, so they "
               "deposit records less often"),
         spec_note=("custodial archive nodes only, the first tier, sited per "
-                   "Physical Layer section 3.2; node spacing follows the "
-                   "mean probe spacing"),
+                   "Physical Layer section 3.2; about a million nodes, or "
+                   "one per probe in a smaller fleet"),
     ),
     "sparse": dict(
         cache_spacing_kpc=5.0, detour_kpc=2.5, consolidated=True,
@@ -386,18 +396,29 @@ class Scenario:
                                 ", ".join(sorted(ARCHIVE_PRESETS))))
 
 
+def spread_spacing_kpc(sc: Scenario, count: float) -> float:
+    """Distance between neighbors where `count` points are spread evenly
+    through the disc: probes, or archive stations.
+
+    In one layer each point has a square cell of its own. Points that
+    would then lie closer together than the disc is thick do not fit in
+    one layer: they fill the disc, several above one another, each in the
+    middle of a cube of its own."""
+    area_kpc2 = math.pi * sc.disc_radius_kpc ** 2 / count
+    layer_kpc = math.sqrt(area_kpc2)
+    if layer_kpc < sc.disc_thickness_kpc:
+        return (area_kpc2 * sc.disc_thickness_kpc) ** (1.0 / 3.0)
+    return layer_kpc
+
+
 def fleet_geometry(sc: Scenario) -> dict:
     """Spacing and timing of the fleet, computed from the scenario
-    (the quantities of the regime table, Physical Layer section 1)."""
+    (the quantities of the regime table, Physical Layer section 1, which
+    counts its billion probes as filling the disc)."""
     area_kpc2 = math.pi * sc.disc_radius_kpc ** 2 / sc.probes
     layer_kpc = math.sqrt(area_kpc2)            # one probe per square cell
-    # Probes that would lie closer together in one layer than the disc is
-    # thick do not fit in one layer: they fill the disc, several above one
-    # another, each in the middle of a cube of its own. That table counts
-    # its billion probes this way.
     stacked = layer_kpc < sc.disc_thickness_kpc
-    spacing_kpc = ((area_kpc2 * sc.disc_thickness_kpc) ** (1.0 / 3.0)
-                   if stacked else layer_kpc)
+    spacing_kpc = spread_spacing_kpc(sc, sc.probes)
     # Same area per probe on a lattice where each probe has six neighbors.
     lattice_kpc = math.sqrt(2.0 * area_kpc2 / math.sqrt(3.0))
     light_years = spacing_kpc * KPC_M / C_M_PER_S / YEAR_S
@@ -411,7 +432,7 @@ def fleet_geometry(sc: Scenario) -> dict:
     return dict(
         area_per_probe_kpc2=area_kpc2,
         spacing_kpc=spacing_kpc,
-        # the same counted in one layer, as the regime table does
+        # the same counted in one layer
         layer_spacing_kpc=layer_kpc,
         stacked=stacked,
         layers=sc.disc_thickness_kpc / spacing_kpc if stacked else 1.0,
@@ -434,7 +455,8 @@ def resolve_layout(sc: Scenario) -> dict:
     preset = ARCHIVE_PRESETS[sc.archives]
     spacing_kpc = preset["cache_spacing_kpc"]
     if spacing_kpc is None and preset["deposit_every"] is not None:
-        spacing_kpc = fleet_geometry(sc)["spacing_kpc"]
+        spacing_kpc = spread_spacing_kpc(
+            sc, min(float(sc.probes), DOCTRINE_STATIONS))
     layout = dict(
         name=sc.archives,
         cache_spacing_kpc=spacing_kpc,
@@ -445,10 +467,10 @@ def resolve_layout(sc: Scenario) -> dict:
         description=preset["help"],
     )
     if sc.station_count is not None:
-        # Stations spread over the disc: spacing from equal-area cells,
-        # mean detour of order half the spacing.
-        area_kpc2 = math.pi * sc.disc_radius_kpc ** 2
-        spacing = math.sqrt(area_kpc2 / sc.station_count)
+        # Stations spread through the disc like the probes: in one layer,
+        # or filling the disc where they are many. Mean detour of order
+        # half the spacing.
+        spacing = spread_spacing_kpc(sc, sc.station_count)
         layout.update(cache_spacing_kpc=spacing, detour_kpc=spacing / 2.0,
                       consolidated=True,
                       deposit_every=layout["deposit_every"] or 1,
@@ -3454,9 +3476,9 @@ def render_report(r: dict, canonical: bool = False) -> str:
                      "themselves, at close range, so the rate of the link "
                      "budget is used as it stands.")
         else:
-            text += (" The link budget gives %s bits per second at its "
-                     "reference distance of %s; the rate falls with the "
-                     "square of the distance, here the %s between archive "
+            text += (" Between two archive stations the link budget gives "
+                     "%s bits per second at %s; the rate falls with the "
+                     "square of the distance, here the %s between "
                      "stations."
                      % (sig(sc["bitrate_bps"], 2),
                         fmt_kiloparsecs(LINK_REFERENCE_M / KPC_M, canonical),
@@ -4143,7 +4165,9 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--station-count", type=int, metavar="COUNT",
                    dest="station_count",
                    help="place this many staffed archive stations evenly "
-                        "over the disc, deriving spacing and side trips")
+                        "through the disc, deriving spacing and side "
+                        "trips; a probe then carries its records to a "
+                        "station")
     g.add_argument("--consolidation-years", type=float, metavar="YEARS",
                    dest="consolidation_years",
                    help="how often staffed stations merge everyone's "
@@ -4162,11 +4186,12 @@ def build_parser() -> argparse.ArgumentParser:
                         "must be for it to be that sure")
     g.add_argument("--bitrate", type=float, metavar="NUMBER",
                    dest="bitrate_bps",
-                   help="optical link speed in bits per second at the "
-                        "reference distance of the specification's link "
-                        "budget (default 0.5; the specification derives "
-                        "0.1 to 1); the rate used falls with the square "
-                        "of the distance between archive stations")
+                   help="optical link speed in bits per second of the "
+                        "specification's link budget (default 0.5; the "
+                        "specification derives 0.1 to 1). Two archive "
+                        "stations reach it 0.26 kiloparsecs apart; the "
+                        "rate used falls with the square of the distance "
+                        "between stations")
     g.add_argument("--message-bytes", type=float, metavar="COUNT",
                    dest="message_bytes",
                    help="size of one compact survey message (default 500)")
