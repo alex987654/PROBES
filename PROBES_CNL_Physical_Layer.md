@@ -355,15 +355,16 @@ Countermeasures, in force from the first transmitted bit:
    `T_act`, for every probe alike. **DSP-3:** message emission
    fleet-wide begins at a catalogue activation epoch `T_act` ≥
    the dispersal envelope; beacon cycle counts run from that
-   epoch (TIME-1). The envelope is the disc diameter
-   divided by the cruise speed, the longest leg possible from
-   any entry point. No smaller value is origin-blind: an
-   envelope sized to the fleet's own longest leg would encode
-   the entry radius, and a probe that began recording on
-   arrival would date its first observation by its distance
-   from the entry. The cost is real — every probe waits
-   ≈ 1×10⁶ years at nominal speed (≈ 30 kpc at 0.1 c) before
-   its first recorded observation — and it is the price of an
+   epoch (TIME-1). The envelope is the time of the longest leg
+   possible from any entry point: the disc diameter at the
+   cruise speed, with the refueling stops of such a leg (§6.1).
+   No smaller value is origin-blind: an envelope sized to the
+   fleet's own longest leg would encode the entry radius, and a
+   probe that began recording on arrival would date its first
+   observation by its distance from the entry. The cost is
+   real — every probe waits ≈ 1×10⁶ years at nominal speed
+   (≈ 30 kpc at 0.1 c, with ≈ 100 refueling stops) before its
+   first recorded observation — and it is the price of an
    origin-free sky. The tempting shortcut (each probe takes the
    *nearest* unclaimed seed) is rejected: it recreates the
    cluster around the entry that dispersal exists to erase.
@@ -442,9 +443,10 @@ target-selection rule (`PROC-1`) selects among unsurveyed
 systems only those reachable within the current energy budget
 `E_leg` — a public catalogue rule evaluated on local state, so
 routing stays sender-invariant without any probe disclosing
-that state. Dispersal legs close the loop the same way: their
-refueling stops fall under DSP-2 and leave no recorded
-observation.
+that state. Dispersal legs close the loop the same way, with
+one refueling stop per ≈ 10⁴ years of cruise, ≈ 100 on the
+longest leg. These stops fall under DSP-2 and leave no recorded
+observation, and the dispersal envelope counts them (§4.5).
 
 ### 6.2 Storage and fuel
 
