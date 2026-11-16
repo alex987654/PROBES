@@ -2098,6 +2098,11 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
         open_ramp_s = max(0.0, open_first_s - open_cruise_s)
         mixed_dup = f_dup
 
+        def mixed_seconds(share):
+            return visited_per_probe * (1.0 + mixed_dup) * (
+                open_cruise_s * _over_parts(0, share)
+                + (open_ramp_s + dwell_s) * share)
+
         def core(share):
             """Seconds of survey until this share is done, side trips
             to the archives aside."""
@@ -2107,10 +2112,7 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
                     still_s = _line(share, marks[i - 1], marks[i],
                                     still_at[i - 1], still_at[i])
                     break
-            mixed_s = visited_per_probe * (1.0 + mixed_dup) * (
-                open_cruise_s * _over_parts(0, share)
-                + (open_ramp_s + dwell_s) * share)
-            return (1.0 - mixed) * still_s + mixed * mixed_s
+            return (1.0 - mixed) * still_s + mixed * mixed_seconds(share)
 
         core_raw = core(1.0)
         # The last system cannot be done before the average probe has
@@ -2136,7 +2138,7 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
             uneven_s = 0.0
         survey_s = core_all + detour_s
         f_dup = duplication_s / work_s
-        equal_count = None
+        equal_count = equal_work = None
         if detail and mixed < 0.5:
             # The figures give every probe the same amount of work. With
             # the same number of systems instead, a probe needs its share
@@ -2166,7 +2168,9 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
                                 marks[i - 1], marks[i])
                             break
                 return total
-            equal_count = {}
+            # Both on the footing of the milestones: the small weight
+            # that the laws for mixing stars keep is the same either way.
+            equal_count, equal_work = {}, {}
             for share in (0.5, 0.99, 0.999):
                 low, high = 0.0, 1e6 * still_at[-1]
                 for _ in range(80):
@@ -2175,10 +2179,14 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
                         low = mid
                     else:
                         high = mid
-                equal_count["%g" % share] = high / YEAR_S
+                equal_count["%g" % share] = (
+                    (1.0 - mixed) * high
+                    + mixed * mixed_seconds(share)) / YEAR_S
+                equal_work["%g" % share] = core(share) / YEAR_S
         still = dict(
             weight=1.0 - mixed,
             equal_count_years=equal_count,
+            equal_work_years=equal_work,
             share_time_years=share_time_s / YEAR_S,
             foresight=sc.confidence,
             records_late_share_times=(None if math.isinf(tau_s)
@@ -3051,7 +3059,7 @@ def describe_left_out(r: dict, canonical: bool = False) -> list:
     still = r.get("still")
     if still and still["equal_count_years"]:
         equal = still["equal_count_years"]
-        levels = still["years_to_levels"]
+        levels = still["equal_work_years"]
         balance = (
             "Balance. Every probe is given the same amount of work, so a "
             "probe has fewer systems where they lie far apart. The uneven "

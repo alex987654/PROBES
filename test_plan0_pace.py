@@ -2889,6 +2889,32 @@ class TestStillField(unittest.TestCase):
             ph["archive_detours_years"], places=6)
         self.assertAlmostEqual(r["total_years"] / 989_100, 1.0, delta=0.001)
 
+    def test_equal_work_against_equal_numbers_of_systems(self):
+        # Every probe is given the same amount of work. With the same
+        # number of systems instead, the dense parts finish sooner and the
+        # thin outer parts lag: 99 percent takes twice as long.
+        r = pp.derive(pp.Scenario())
+        still = r["still"]
+        work, count = still["equal_work_years"], still["equal_count_years"]
+        self.assertLess(count["0.5"], work["0.5"])
+        self.assertAlmostEqual(count["0.99"] / work["0.99"], 2.0, delta=0.05)
+        self.assertGreater(count["0.999"], 3.5 * work["0.999"])
+        # The comparison stands on the footing of the milestones, so the
+        # report gives one figure for 99 percent, not two.
+        into = {m["fraction"]: m["years"] - r["phases"]["dispersal_years"]
+                for m in r["milestones"]}
+        self.assertAlmostEqual(work["0.5"], into[0.5], places=6)
+        self.assertAlmostEqual(work["0.99"], into[0.99], places=6)
+        text = "\n".join(pp.describe_left_out(r))
+        self.assertIn("against %s and %s" % (
+            pp.fmt_duration(into[0.99]), pp.fmt_duration(work["0.999"])),
+            " ".join(text.split()))
+        # Inside the many draws of the uncertainty mode the comparison is
+        # not worked out.
+        quick = pp.derive(pp.Scenario(), detail=False)["still"]
+        self.assertIsNone(quick["equal_count_years"])
+        self.assertIsNone(quick["equal_work_years"])
+
     def test_what_a_probe_knows_changes_the_survey_not_the_total_much(self):
         base = pp.derive(pp.Scenario())
         sure = pp.derive(pp.Scenario(confidence=1.0))
