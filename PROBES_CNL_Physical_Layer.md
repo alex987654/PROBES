@@ -49,8 +49,8 @@ approach distances.
 
 ### 2.2 Optical (flown demonstration, studied at range)
 
-Deep-space optical communication was demonstrated operationally
-in 2023 beyond 2 astronomical-unit-class distances, and
+Deep-space optical communication was demonstrated in flight
+from 2023 and, in 2024, across more than 3 astronomical units, and
 laser-link scaling to interstellar ranges was studied in the
 historically discussed literature on beamed-sail probe concepts.
 An order-of-magnitude budget for neighbor-to-neighbor contact:
