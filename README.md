@@ -313,18 +313,29 @@ exactly, and the digest is computed over the canonical W-form.
 
 ---
 
-## 9. Companion Tool
+## 9. Companion Tools
 
 `plan0_pace.py` — a stand-alone, dependency-free Python calculator (not part
-of the language specification) that estimates at what pace the 10,000-probe
-fleet could survey this galaxy under `PLAN-0`, for configurable archive
-layouts and the communication regime of the Physical Layer document:
+of the language specification) that estimates at what pace the fleet of a
+billion probes could survey this galaxy under `PLAN-0`, for configurable
+archive layouts and the communication regime of the Physical Layer
+document:
 
 ```
 python plan0_pace.py --help
 ```
 
-Its test suite is `test_plan0_pace.py` (`python -m unittest`).
+`plan0_sim.py` — a stand-alone, dependency-free simulation that follows
+single probes from star system to star system during the survey. The
+calculator takes its figures for the survey phase from it; the runs
+behind them are in `plan0_sim_results/`:
+
+```
+python plan0_sim.py --help
+```
+
+The test suites are `test_plan0_pace.py` and `test_plan0_sim.py`
+(`python -m unittest`).
 
 ---
 
