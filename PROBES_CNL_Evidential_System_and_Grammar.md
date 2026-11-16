@@ -106,7 +106,7 @@ Tier 1.
 
 | Form | Example |
 |---|---|
-| `(executed, procedure [proc-ref], journal [jrn-ref])` | "The survey of region `REG-4471` reached completion (executed, procedure `PROC-12`, journal `JRN-1`)." |
+| `(executed, procedure [proc-ref], journal [jrn-ref])` | "The survey of target `TGT-1088` reached completion (executed, procedure `PROC-12`, journal `JRN-1`)." |
 | `(executed, procedure [proc-ref], journal [jrn-ref], steps [a]-[b])` | "Sample collection on target `TGT-1088` covered nine sites (executed, procedure `PROC-31`, journal `JRN-1`, steps 4-12)." |
 
 **Linter rule (E-ACT-1):** the procedure reference must resolve
@@ -126,7 +126,7 @@ did as first-hand fact.
 **Why E-ACT exists.** The base language reports observations of
 the world and stipulates procedures, but cannot state *what the
 author did*. Fleet coordination (Overview §3.2) runs entirely
-on completion facts — "region surveyed," "cache placed,"
+on completion facts — "target surveyed," "cache placed,"
 "sub-probe deployed" — so those facts need a first-hand,
 lintable tag with a journal-backed pedigree.
 
@@ -175,7 +175,7 @@ Added for the fleet:
 | Denied basis | Enforcement |
 |---|---|
 | **Tasking** ("probe X performs Y") | no suasive verbs, no deontic modals, no addressee vocabulary, E-PRO-4, E-ACT-3 |
-| **Second-hand action claims** ("probe X surveyed region R" as bare fact) | expressible only as E-RLY citing X's own E-ACT message |
+| **Second-hand action claims** ("probe X surveyed target T" as bare fact) | expressible only as E-RLY citing X's own E-ACT message |
 | **Origin and provenance claims** | provenance word class absent; ORG rules §5.4 |
 | **Second intent** ("this probe operates toward …") | goal vocabulary absent; only `(stipulated, for `PLAN-0`)` exists (PLAN rules §5.2) |
 | **Self-state disclosure** ("the energy reserve of the probe equals …") | SELF-1 (§5.4a): sender internal state inexpressible; sender appears only as E-ACT actor or in single-epoch geometry |

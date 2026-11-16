@@ -69,7 +69,7 @@ digest: 9b2e44c7a1d0f358aa10b6c94d21e7f3c0884d1a52ef90b7361cd42a8fe15690
 ## Execution
 
 ```execution
-The survey of region `REG-4471` reached completion (executed, procedure `PROC-12`, journal `JRN-1`).
+The survey of target `TGT-1088` reached completion (executed, procedure `PROC-12`, journal `JRN-1`).
 The probe deployed lander `LND-1` at `TGT-1088` (executed, procedure `PROC-31`, journal `JRN-1`, steps 1-6).
 ```
 
@@ -106,7 +106,7 @@ The oxygen pattern of `TGT-1088` remains compatible with this candidate (hypothe
   no origin-derived units.
 - **Coordination without tasking.** The E-ACT completion record
   is all another probe needs: applying `PROC-1`'s deterministic
-  region-selection rule to this fact steers it elsewhere. No
+  target-selection rule to this fact steers it elsewhere. No
   imperative crossed the channel.
 - **Bounded interpretation.** The biosignature question lives
   strictly in the Hypothesis register, as two declared,
@@ -130,7 +130,7 @@ D|PRC|12|31
 D|JRN|1
 D|HYP|H-1=1|H-2=2
 #|3
-C|A|p=PROC-12|j=JRN-1|T3:N5V;REG-4471
+C|A|p=PROC-12|j=JRN-1|T3:N5V;TGT-1088
 C|A|p=PROC-31|j=JRN-1|st=1-6|T12:N3D;TGT-1088
 #|4
 C|O|v=1|s=CAM-3|T4:N4R;TGT-1090
@@ -218,12 +218,12 @@ panic it cannot phrase.
 ## 5. Non-Compliant Examples (with failure reasons)
 
 **Tasking another probe.**
-"Probe `P-33D1B2AA` surveys region `REG-0032` next (procedure)."
+"Probe `P-33D1B2AA` surveys target `TGT-2210` next (procedure)."
 — E-PRO-4: a procedure may not name another probe as actor;
 also fails O-1/O-2 (procedure outside an ordered list).
 
 **Second-hand action as bare fact.**
-"Probe `P-33D1B2AA` completed the survey of `REG-0032`
+"Probe `P-33D1B2AA` completed the survey of `TGT-2210`
 (observed, `RX-1`)." — E-ACT-3 deny-list: another probe's
 action is expressible only as E-RLY citing that probe's own
 E-ACT message.
@@ -275,7 +275,7 @@ of fleet traffic:
 
 1. **Expand** PROBES-W to PROBES-H mechanically (Wire Format
    §8); verify digests; deduplicate by `MG` and by
-   (sender, region, procedure) on E-ACT records.
+   (sender, target, procedure) on E-ACT records.
 2. **Weight by tier.** Tier 1 clauses (E-OBS, E-MSR, E-ACT)
    anchor the report; Tier 2 clauses carry their full pedigree
    (premises, models, datasets, hop counts) for audit; Tier 3
