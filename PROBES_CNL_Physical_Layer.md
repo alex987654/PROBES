@@ -179,8 +179,9 @@ documents cited per item):
   (and single capital letters are not tokens); stars are
   characterized numerically: effective temperature in kelvin,
   luminosity in watts, mass in grams.
-- **ORG-3:** structural catalogues (`CAT-CCH`, `CAT-REG`) carry
-  no establishment, founding, or first-visit epochs.
+- **ORG-3:** structural catalogues (`CAT-CCH`, `CAT-REG`,
+  `CAT-TGT`) carry no establishment, founding, or first-visit
+  epochs.
 - Gravitational-potential and beacon-geometry criteria touch
   `PROC-NAV` budgets and `CAT-CCH` schema — catalogue content,
   zero grammar.
@@ -215,7 +216,7 @@ benefit that saturates.
 ### 4.1 What relaying is for
 
 Gossip (E-RLY) exists to move **coordination-relevant facts**
-— region completions (E-ACT), local hazards, cache manifests —
+— survey completions (E-ACT), local hazards, cache manifests —
 to the probes that can act on them *sooner than the archive
 cycle would*. Everything else (science payloads, beacon timing
 models, resource surveys) is archive traffic (E-RPT), which has
@@ -301,7 +302,7 @@ mid-disc radius). Nothing in any message names that place — but
 **activity patterns can betray what vocabulary cannot**:
 
 - *Wavefront attack:* coverage archives sampled at two epochs
-  show a growing disc of completed regions; fitting circles to
+  show a growing disc of surveyed systems; fitting circles to
   the two fronts locates the common center — the entry point.
   This works even with perfect per-message origin erasure.
 - *Founding-order attack:* cache establishment dates, earliest
@@ -399,8 +400,8 @@ mission slept 31 months and woke on schedule). None of that
 reaches 10⁴-year cruise legs on stored charge — so the mission
 profile must close the energy loop at stars, and it naturally
 does: **the survey targets are the refueling stops.** The
-region-selection rule (`PROC-1`) selects among unsurveyed
-regions only those reachable within the current energy budget
+target-selection rule (`PROC-1`) selects among unsurveyed
+systems only those reachable within the current energy budget
 `E_leg` — a public catalogue rule evaluated on local state, so
 routing stays sender-invariant without any probe disclosing
 that state.

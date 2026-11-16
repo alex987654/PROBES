@@ -349,10 +349,10 @@ Together TRJ-1 … TRJ-3 prevent reconstruction of any probe's
 long-run trajectory from message traffic, which blocks
 back-extrapolation toward a common launch origin.
 
-**ORG-3:** structural catalogues (`CAT-CCH`, `CAT-REG`)
-carry no establishment, founding, or first-visit epochs.
-Activity chronology is what an origin-inference attack fits
-circles to (Physical Architecture §4.5); deduplication and
+**ORG-3:** structural catalogues (`CAT-CCH`, `CAT-REG`,
+`CAT-TGT`) carry no establishment, founding, or first-visit
+epochs. Activity chronology is what an origin-inference attack
+fits circles to (Physical Architecture §4.5); deduplication and
 routing need status, never dates.
 
 ### 5.4a Consolidation and self-state rules
@@ -370,6 +370,11 @@ in the archive and do not satisfy the preconditions of
 catalogue procedures (e.g., resource thresholds for `PROC-RCH`).
 This is the containment backstop for false-but-well-formed
 content from a compromised probe.
+
+**CONS-3:** coverage is kept by system. A coverage aggregate
+holds, for every star system of `CAT-TGT` within its scope,
+whether a completion record for it exists. A region has no
+completion status of its own.
 
 **SELF-1:** quantities predicated on the sending
 probe's internal state — energy reserves, consumables,
