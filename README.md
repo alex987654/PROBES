@@ -143,14 +143,28 @@ No probe can instruct another. Coordination emerges from shared
 facts plus shared deterministic rules:
 
 1. A probe publishes **execution records** (E-ACT, §see grammar
-   doc): "survey of region `REG-4471` completed per `PROC-12`."
-2. The catalogue procedure `PROC-1` (region selection) contains
-   a deterministic rule: from the regions with zero completion
-   records visible to the probe, select by the fixed ordering
-   in `CAT-REG`.
+   doc): "survey of target `TGT-1088` completed per `PROC-12`."
+2. The catalogue procedure `PROC-1` (target selection) contains
+   a deterministic rule. A probe first works its own region,
+   the one `PROC-DSP` seeds it in, and selects the nearest
+   system there that it does not hold to be surveyed. When its
+   region holds none, it selects the nearest such system
+   anywhere within reach.
 
-Every probe applying the same rule to the same facts makes
-compatible choices. No imperative ever crosses the channel.
+Every probe applies the same rule to the same facts. The
+regions keep probes apart without a message, and completion
+belongs to the system. No imperative ever crosses the channel.
+
+The same rule lets a probe conclude what it has no record of.
+From the rule, the regions and the positions of the stars, a
+probe can derive (E-DER) what its neighbors have surveyed and
+will survey: a hundred systems each, well inside the stretch
+for which such a derivation holds. `PROC-1` holds a system to
+be surveyed when a completion record for it is visible, or when
+such a derivation makes its completion at least 0.95 probable.
+The execution record in the archives remains the only proof: a
+derivation that no record has confirmed lapses, and the system
+counts as unsurveyed again.
 
 ---
 

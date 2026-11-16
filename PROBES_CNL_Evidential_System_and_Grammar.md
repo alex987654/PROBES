@@ -376,6 +376,15 @@ holds, for every star system of `CAT-TGT` within its scope,
 whether a completion record for it exists. A region has no
 completion status of its own.
 
+**CONS-4:** an entry of `CAT-TGT` for a star system holds what
+lets a later probe recognize it: position and velocity in the
+Galactic Standard Frame, reduced to the one epoch that the
+catalogue version declares, and quantities that stay the same
+over the survey — the masses, effective temperatures and
+luminosities of its stars. A probe passes a star by as a
+surveyed target only when the match is at least 0.9999
+probable; below that it surveys the system.
+
 **SELF-1:** quantities predicated on the sending
 probe's internal state — energy reserves, consumables,
 component condition, mass, velocity, temperatures — are
