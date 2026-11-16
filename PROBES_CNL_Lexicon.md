@@ -282,7 +282,7 @@ clause text, exactly as in the base language.
 
 | Prefix | Namespace | Assigned by |
 |---|---|---|
-| `P-` | probe (8 hexadecimal characters, drawn uniformly at random at manufacture; no sequence, no batch structure) | manufacture |
+| `P-` | probe (8 hexadecimal characters, drawn uniformly at random at manufacture, no two probes alike; no sequence, no batch structure) | manufacture |
 | `MSG-` | message (16 hexadecimal characters = digest prefix) | content |
 | `PLAN-` | plan; only `PLAN-0` exists | specification |
 | `PROC-` | catalogue procedure | `CAT-PROC` |
