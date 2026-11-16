@@ -195,6 +195,31 @@ class TestSets(unittest.TestCase):
             self.assertEqual(alone["times"]["0.99"], cells["times"]["0.99"])
 
 
+class TestTables(unittest.TestCase):
+    def test_the_calculator_carries_what_the_stored_runs_give(self):
+        # The two tables of plan0_pace.py are made from the stored runs
+        # and from nothing else: one for starting points drawn at random,
+        # one for probes spread evenly on a lattice.
+        import plan0_pace as pp
+        here = os.path.dirname(os.path.abspath(__file__))
+        summary = ps.summarise(os.path.join(here, "plan0_sim_results",
+                                            "results.jsonl"))
+        self.assertEqual(ps.calibration(summary), pp.STILL_FIELD)
+        self.assertEqual(ps.calibration(summary, "points"), pp.STILL_FIELD)
+        self.assertEqual(ps.calibration(summary, "lattice"),
+                         pp.STILL_FIELD_EVEN)
+        # every run of the two sets behind them is stored
+        stored = set()
+        with open(os.path.join(here, "plan0_sim_results",
+                               "results.jsonl")) as fh:
+            for line in fh:
+                stored.add(json.dumps(json.loads(line)["asked"],
+                                      sort_keys=True))
+        for name in ("full", "even"):
+            for _, config in ps.matrix(name):
+                self.assertIn(json.dumps(config, sort_keys=True), stored)
+
+
 class TestManual(unittest.TestCase):
     def test_plain_words(self):
         text = ps.build_parser().format_help()

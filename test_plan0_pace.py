@@ -90,13 +90,24 @@ class TestModel(unittest.TestCase):
         # the survey starts: 30 kiloparsecs at 0.1 of light speed, 978,000
         # years, which no probe may cut short without showing where the
         # fleet set out from.
+        #
+        # Within the band the default moved once more, from 989 to 987
+        # thousand years: the probes now start spread evenly, one to a
+        # region of its own, as Physical Layer 4.5 has it, where they
+        # started at points drawn at random. The survey after the
+        # scattering is 8,700 years where it was 10,600.
         r = pp.derive(pp.Scenario())
         self.assertEqual(r["scenario"]["probes"], 10 ** 9)
         self.assertEqual(r["strategy"], "systems")
+        self.assertEqual(r["scenario"]["starts"], "even")
         self.assertEqual(r["scenario"]["speed_c"], 0.1)
         self.assertEqual(r["visited_per_probe"], 100.0)
         self.assertGreater(r["total_years"], 0.95e6)
         self.assertLess(r["total_years"], 1.05e6)
+        self.assertAlmostEqual(r["total_years"] / 987.2e3, 1.0, delta=0.0005)
+        self.assertAlmostEqual(
+            pp.derive(pp.Scenario(starts="random"))["total_years"] / 989.1e3,
+            1.0, delta=0.0005)
         self.assertAlmostEqual(r["phases"]["dispersal_years"] / 9.785e5, 1.0,
                                places=3)
         self.assertGreater(r["phases"]["dispersal_years"]
@@ -1016,9 +1027,11 @@ class TestFleetGeometry(unittest.TestCase):
                                delta=0.03)
         self.assertAlmostEqual(r["phases"]["dispersal_years"] / 1e6, 1.0,
                                delta=0.03)
-        # The survey after activation: about ten thousand years.
+        # The survey after activation: about nine thousand years, within
+        # one consolidation cycle.
         after = r["total_years"] - r["phases"]["dispersal_years"]
-        self.assertAlmostEqual(after / 1e4, 1.0, delta=0.1)
+        self.assertAlmostEqual(after / 9e3, 1.0, delta=0.05)
+        self.assertLess(after, sc.consolidation_years)
         self.assertTrue(g["stacked"])
         self.assertAlmostEqual(g["spacing_kpc"] * 1000, 7.91, delta=0.01)
         self.assertAlmostEqual(g["layer_spacing_kpc"] * 1000, 0.841,
@@ -2124,7 +2137,7 @@ class TestStrategies(unittest.TestCase):
     def test_partial_mixing_lies_between_the_two_laws(self):
         mixed = pp.derive(ten_thousand(strategy="systems"))
         share_hop = (pp.derive(ten_thousand(strategy="regions"))["hop_parsec"]
-                     * pp.STILL_FIELD["hop"] / 0.78)
+                     * pp.STILL_FIELDS[pp.Scenario().starts]["hop"] / 0.78)
         previous = None
         for probes in (10_000, 300_000, 3_000_000, 30_000_000, 10 ** 9):
             r = pp.derive(ten_thousand(strategy="systems", probes=probes))
@@ -2900,7 +2913,20 @@ class TestStillField(unittest.TestCase):
                          pp.still_field(300.0, 0.0, 0.0)["travel"])
 
     def test_the_plan(self):
-        r = pp.derive(pp.Scenario())
+        # The default has the probes spread evenly, one to a region of its
+        # own (Physical Layer 4.5). Starting points drawn at random stay
+        # one flag away, with the figures they had as the default.
+        self.assertEqual(pp.derive(pp.Scenario())["still"]["starts"], "even")
+        for starts, pinned in (
+                ("even", dict(wasted=0.064, half=2960, most=6910, last=8050,
+                              total=987_170)),
+                ("random", dict(wasted=0.161, half=3030, most=7660,
+                                last=9990, total=989_120))):
+            with self.subTest(starts=starts):
+                self.check_the_plan(pp.derive(pp.Scenario(starts=starts)),
+                                    **pinned)
+
+    def check_the_plan(self, r, wasted, half, most, last, total):
         still, ph = r["still"], r["phases"]
         self.assertGreater(still["weight"], 0.98)
         self.assertEqual(still["foresight"], 0.95)
@@ -2937,27 +2963,28 @@ class TestStillField(unittest.TestCase):
                                    msg=m["fraction"])
         years = [m["years"] for m in r["milestones"]]
         self.assertEqual(years, sorted(years))
-        # One visit in six is wasted, so a probe makes about 120 stops
-        # for its hundred systems.
+        # One visit in sixteen is wasted where the probes start spread
+        # evenly, one in six where they start at random: 107 or 120 stops
+        # for a hundred systems.
+        self.assertAlmostEqual(still["wasted_visit_share"], wasted,
+                               delta=0.001)
         wasted = still["wasted_visit_share"]
-        self.assertAlmostEqual(wasted, 0.16, delta=0.01)
         self.assertAlmostEqual(
             r["stops_per_probe"],
             100 * (1 + still["weight"] * wasted / (1 - wasted)
                    + (1 - still["weight"]) * 0.5), places=6)
-        # The simulated figures, in years after the survey starts: half of
-        # the systems after 3,000, 99 percent after 7,700, the last after
-        # 10,000. The one deposit of its records, at the end of a probe's
-        # share, delays none of them.
+        # The simulated figures, in years after the survey starts: half
+        # of the systems, 99 percent, and the last. The one deposit of
+        # its records, at the end of a probe's share, delays none of them.
         into = {m["fraction"]: m["years"] - ph["dispersal_years"]
                 for m in r["milestones"]}
-        self.assertAlmostEqual(into[0.5] / 3030, 1.0, delta=0.01)
-        self.assertAlmostEqual(into[0.99] / 7660, 1.0, delta=0.01)
-        self.assertAlmostEqual(into[1.0] / 9990, 1.0, delta=0.01)
+        self.assertAlmostEqual(into[0.5] / half, 1.0, delta=0.005)
+        self.assertAlmostEqual(into[0.99] / most, 1.0, delta=0.005)
+        self.assertAlmostEqual(into[1.0] / last, 1.0, delta=0.005)
         self.assertAlmostEqual(
             r["total_years"] - ph["dispersal_years"] - into[1.0],
             ph["archive_detours_years"], places=6)
-        self.assertAlmostEqual(r["total_years"] / 989_100, 1.0, delta=0.001)
+        self.assertAlmostEqual(r["total_years"] / total, 1.0, delta=0.00001)
 
     def test_equal_work_against_equal_numbers_of_systems(self):
         # Every probe is given the same amount of work. With the same
@@ -2967,8 +2994,12 @@ class TestStillField(unittest.TestCase):
         still = r["still"]
         work, count = still["equal_work_years"], still["equal_count_years"]
         self.assertLess(count["0.5"], work["0.5"])
-        self.assertAlmostEqual(count["0.99"] / work["0.99"], 2.0, delta=0.05)
+        self.assertAlmostEqual(count["0.99"] / work["0.99"], 2.06, delta=0.05)
         self.assertGreater(count["0.999"], 3.5 * work["0.999"])
+        scattered = pp.derive(pp.Scenario(starts="random"))["still"]
+        self.assertAlmostEqual(scattered["equal_count_years"]["0.99"]
+                               / scattered["equal_work_years"]["0.99"], 2.0,
+                               delta=0.05)
         # The comparison stands on the footing of the milestones, so the
         # report gives one figure for 99 percent, not two.
         into = {m["fraction"]: m["years"] - r["phases"]["dispersal_years"]
@@ -3026,8 +3057,10 @@ class TestStillField(unittest.TestCase):
         for phrase in ["waiting for the last systems",
                        "The two that record by system are the same here",
                        "only the facts of its neighbors can matter to it",
-                       "Physical Layer 4.5 spreads them evenly, one "
-                       "probe to a region of its own",
+                       "The probes start spread evenly, one to a region "
+                       "of its own (Physical Layer 4.5)",
+                       "With starting points drawn at random (--starts "
+                       "random) 99% of the systems would be done",
                        "into the survey",
                        "a simulation that follows single probes "
                        "(plan0_sim.py)",
@@ -3046,6 +3079,104 @@ class TestStillField(unittest.TestCase):
         crowd = " ".join(pp.render_report(pp.derive(pp.Scenario(
             probes=3 * 10 ** 10))).split())
         self.assertIn("the simulation covers 10 to 300", crowd)
+
+
+class TestStarts(unittest.TestCase):
+    """Where the probes start: spread evenly, one to a region of its own,
+    as Physical Layer 4.5 has it and as the default; or at points drawn
+    at random."""
+
+    def test_default_and_choices(self):
+        self.assertEqual(pp.Scenario().starts, "even")
+        self.assertEqual(parse([]).starts, "even")
+        self.assertEqual(parse(["--starts", "random"]).starts, "random")
+        self.assertEqual(list(pp.STARTS), ["even", "random"])
+        with self.assertRaises(ValueError):
+            pp.derive(pp.Scenario(starts="scattered"))
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(
+                io.StringIO()):
+            parse(["--starts", "scattered"])
+        help_text = " ".join(pp.build_parser().format_help().split())
+        self.assertIn("--starts NAME", help_text)
+        self.assertIn("one probe to a region of its own (default",
+                      help_text)
+
+    def test_two_tables_of_one_shape(self):
+        even, scattered = pp.STILL_FIELD_EVEN, pp.STILL_FIELD
+        self.assertIs(pp.STILL_FIELDS["even"], even)
+        self.assertIs(pp.STILL_FIELDS["random"], scattered)
+        self.assertEqual(even["levels"], scattered["levels"])
+        self.assertEqual(sorted(even["per_probe"]),
+                         sorted(scattered["per_probe"]))
+        self.assertEqual(
+            [(row["foresight"], row["late"]) for row in even["knowledge"]],
+            [(row["foresight"], row["late"])
+             for row in scattered["knowledge"]])
+        # The hops are the same; what differs is the wait for the largest
+        # shares and the visits wasted.
+        self.assertAlmostEqual(even["hop"], scattered["hop"], delta=0.005)
+        for a, b in zip(even["knowledge"], scattered["knowledge"]):
+            if a["foresight"] < 1.0:
+                self.assertLess(a["wasted"], b["wasted"])
+        count = len(even["levels"])
+        for table in (even, scattered):
+            times = [table["travel"][i] + 0.2 * table["stops"][i]
+                     for i in range(count)]
+            self.assertEqual(times, sorted(times))
+        # share times until the last system, at the base of each table
+        last = [(table["travel"][-1] + 0.2 * table["stops"][-1]) / 0.98
+                for table in (even, scattered)]
+        self.assertAlmostEqual(last[0], 1.23, delta=0.01)
+        self.assertAlmostEqual(last[1], 1.40, delta=0.01)
+
+    def test_even_starts_end_sooner_and_waste_less(self):
+        even = pp.derive(pp.Scenario())
+        scattered = pp.derive(pp.Scenario(starts="random"))
+        self.assertEqual(even["phases"]["dispersal_years"],
+                         scattered["phases"]["dispersal_years"])
+        self.assertLess(even["total_years"], scattered["total_years"])
+        self.assertLess(even["still"]["wasted_visit_share"],
+                        0.5 * scattered["still"]["wasted_visit_share"])
+        for a, b in zip(even["milestones"], scattered["milestones"]):
+            self.assertLess(a["years"], b["years"])
+        # The same work either way; fewer wasted visits and a shorter
+        # wait for the largest shares.
+        self.assertAlmostEqual(even["phases"]["survey_work_years"]
+                               / scattered["phases"]["survey_work_years"],
+                               1.0, delta=0.002)
+        self.assertLess(even["phases"]["duplicated_work_years"],
+                        0.5 * scattered["phases"]["duplicated_work_years"])
+        # Each run says what the other way of starting would give.
+        for one, other in ((even, scattered), (scattered, even)):
+            told = one["still"]["other_starts"]
+            self.assertEqual(told["starts"], other["scenario"]["starts"])
+            self.assertAlmostEqual(told["total_years"], other["total_years"])
+            into = (other["milestones"][2]["years"]
+                    - other["phases"]["dispersal_years"])
+            self.assertAlmostEqual(told["years_to_99_percent"], into)
+        text = " ".join(pp.render_report(scattered).split())
+        self.assertIn("The starting points are taken as drawn at random. "
+                      "Spread evenly, one probe to a region of its own, as "
+                      "Physical Layer 4.5 has it, 99% of the systems would "
+                      "be done 6.9 thousand years into the survey", text)
+        self.assertIn("The starting points fall at random, so the shares "
+                      "are uneven", text)
+        self.assertEqual(banned_tokens(text), [])
+
+    def test_only_a_fleet_among_still_stars_notices(self):
+        # Ten thousand probes survey for hundreds of millions of years,
+        # among stars that mix: where they started does not matter.
+        a = pp.derive(ten_thousand())
+        b = pp.derive(ten_thousand(starts="random"))
+        self.assertAlmostEqual(a["total_years"] / b["total_years"], 1.0,
+                               places=9)
+        self.assertEqual(a["unused_inputs"], [])
+        # Where completion is recorded by region it is not used at all.
+        r = pp.derive(pp.Scenario(strategy="regions", starts="random"))
+        self.assertIn("starts", [note["input"]
+                                 for note in r["unused_inputs"]])
+        self.assertEqual(
+            pp.derive(pp.Scenario(strategy="regions"))["unused_inputs"], [])
 
 
 class TestLeftOut(unittest.TestCase):

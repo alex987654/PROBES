@@ -70,6 +70,16 @@ STRATEGIES = {
 }
 RECORDS_BY_SYSTEM = ("systems", "systems-midplane")
 
+# Where the probes start. It matters for a fleet whose survey ends before
+# the stars have moved, where each probe works around its starting point
+# (see STILL_FIELDS).
+STARTS = {
+    "even": ("spread evenly, one probe to a region of its own, as the "
+             "specification has it"),
+    "random": ("at points drawn at random, which leaves some probes with "
+               "many more systems than others"),
+}
+
 # Hops where completion is recorded by system. Simulated (stars drifting at
 # random through a volume that wraps around, up to 300,000 systems): a
 # probe that always goes to the nearest system not yet surveyed makes hops
@@ -112,7 +122,6 @@ LINK_REFERENCE_M = 8.0e18
 # Staffed archive stations of the doctrine (Physical Layer section 3.2,
 # criterion 6): about a million, and never more than one per probe.
 DOCTRINE_STATIONS = 1.0e6
-
 
 # Figures used only to put numbers on what the model leaves out.
 ROTATION_SPEED_M_S = 2.3e5              # orbital speed, similar at all radii
@@ -264,11 +273,11 @@ class Scenario:
     command line or a scenario file; defaults cite the specification or
     standard galactic-astronomy values."""
 
-    # The plan: a billion probes, a hundred star systems each. Physical
-    # Layer section 1 names ten thousand.
+    # A billion probes, a hundred star systems each (Physical Layer
+    # section 1).
     probes: int = 1_000_000_000
-    # Fraction of light speed. The plan asks for at least 0.1; Physical
-    # Layer section 1 names 0.05 as nominal.
+    # Fraction of light speed; Physical Layer section 1 names 0.1 as
+    # nominal.
     speed_c: float = 0.1
     # Workload. The system count is authoritative; densities and the
     # distances between systems follow from it through the galaxy model.
@@ -319,6 +328,7 @@ class Scenario:
     message_bytes: float = 500.0         # wire-form message; Wire Format s.9
     archives: str = "full-network"
     strategy: str = "systems"            # see STRATEGIES
+    starts: str = "even"                 # see STARTS; section 4.5
     cache_spacing_kpc: Optional[float] = None   # overrides preset
     detour_kpc: Optional[float] = None          # overrides preset
     station_count: Optional[int] = None         # derives spacing + detour
@@ -327,7 +337,7 @@ class Scenario:
     attrition_per_year: float = 0.0             # fleet loss rate
     dup_cap: float = 0.5                 # ceiling on duplicated-work fraction
     dup_gain: float = 1.0                # tuning gain on duplication model
-    neighbors: int = 6                   # planar node degree; section 4.3
+    neighbors: int = 6                   # nearest neighbors; section 4.3
     # How sure a probe is of what it takes the others to have done (the
     # plan: right 95 times in 100). Where the stars mix it sets how fresh
     # a probe's knowledge has to be, which the report states. Where they
@@ -389,6 +399,9 @@ class Scenario:
                 or self.strategy not in STRATEGIES):
             raise ValueError("unknown strategy %r (choices: %s)"
                              % (self.strategy, ", ".join(STRATEGIES)))
+        if not isinstance(self.starts, str) or self.starts not in STARTS:
+            raise ValueError("unknown way of starting %r (choices: %s)"
+                             % (self.starts, ", ".join(STARTS)))
         if (not isinstance(self.archives, str)
                 or self.archives not in ARCHIVE_PRESETS):
             raise ValueError("unknown archive layout %r (choices: %s)"
@@ -567,6 +580,9 @@ INPUT_TABLE = [
      "the doctrine layout (Physical Layer section 3)"),
     ("strategy", None, None, None, False,
      "completion recorded by system (README section 3.2)"),
+    ("starts", None, None, None, False,
+     "Physical Layer section 4.5: every probe is seeded in a region of "
+     "its own"),
     ("cache_spacing_kpc", None, None, None, False,
      "set by the archive layout"),
     ("detour_kpc", None, None, None, False,
@@ -1260,23 +1276,150 @@ STILL_FIELD = {
  "even_starts": [0.4813, 0.9402, 1.142, 1.2451, 1.3217, 1.4052],
 }
 
+# The same table for probes that start spread evenly, one to a region of
+# its own, as the dispersal doctrine has it (Physical Layer section 4.5).
+# In the simulation they start on a regular lattice, so that every probe
+# has a cube of the same size to itself; the systems fall into the cubes
+# by chance, which still leaves the shares a tenth apart. To make it again:
+#     python plan0_sim.py --set even --out plan0_sim_results
+#     python plan0_sim.py --report --table --start lattice \
+#         --out plan0_sim_results
+STILL_FIELD_EVEN = {
+ "levels": [0.5, 0.9, 0.99, 0.999, 0.9999, 1.0],
+ "hop": 0.8748,
+ "travel": [0.3704, 0.7388, 0.8813, 0.9307, 0.9603, 0.9996],
+ "stops": [0.5062, 0.9097, 1.0167, 1.0447, 1.0546, 1.0503],
+ "per_probe": {
+  10.0: [1.098, 1.1271, 1.2014, 1.2725, 1.337, 1.3645],
+  30.0: [1.0399, 1.0502, 1.0766, 1.102, 1.1227, 1.1212],
+  100.0: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+  300.0: [0.9799, 0.9696, 0.9583, 0.9458, 0.937, 0.9267],
+ },
+ "knowledge": [
+  {"foresight": 0.0, "late": 0.0,
+   "times": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+   "wasted": 0.0238, "wasted_travel": 0.0881},
+  {"foresight": 0.0, "late": 0.0306,
+   "times": [1.0, 1.0001, 1.0057, 1.0148, 1.0217, 1.0282],
+   "wasted": 0.0372, "wasted_travel": 0.1238},
+  {"foresight": 0.0, "late": 0.102,
+   "times": [1.0, 1.0002, 1.0123, 1.0317, 1.0503, 1.0771],
+   "wasted": 0.0654, "wasted_travel": 0.1898},
+  {"foresight": 0.0, "late": 0.3061,
+   "times": [1.0, 1.0003, 1.0211, 1.0537, 1.0928, 1.1565],
+   "wasted": 0.1441, "wasted_travel": 0.3021},
+  {"foresight": 0.0, "late": 1.0204,
+   "times": [1.0, 1.0005, 1.027, 1.0666, 1.1112, 1.1576],
+   "wasted": 0.2252, "wasted_travel": 0.3136},
+  {"foresight": 0.0, "late": 3.0612,
+   "times": [1.0, 1.0005, 1.0273, 1.0668, 1.1126, 1.1727],
+   "wasted": 0.2453, "wasted_travel": 0.3323},
+  {"foresight": 0.0, "late": 4.0816,
+   "times": [1.0, 1.0005, 1.0273, 1.0668, 1.1126, 1.1727],
+   "wasted": 0.2453, "wasted_travel": 0.3323},
+  {"foresight": 0.0, "late": None,
+   "times": [1.0, 1.0005, 1.0273, 1.0668, 1.1126, None],
+   "wasted": 0.1757, "wasted_travel": 0.2183},
+  {"foresight": 0.8, "late": 0.0,
+   "times": [1.0, 0.9999, 0.9955, 0.9959, 1.0021, 1.0201],
+   "wasted": 0.0146, "wasted_travel": 0.0769},
+  {"foresight": 0.8, "late": 0.0306,
+   "times": [1.0, 1.0, 0.998, 1.0001, 1.0083, 1.0199],
+   "wasted": 0.0207, "wasted_travel": 0.0892},
+  {"foresight": 0.8, "late": 0.102,
+   "times": [1.0, 1.0, 1.0011, 1.0046, 1.012, 1.0192],
+   "wasted": 0.0305, "wasted_travel": 0.1112},
+  {"foresight": 0.8, "late": 0.3061,
+   "times": [1.0, 1.0001, 1.0068, 1.0191, 1.0307, 1.0523],
+   "wasted": 0.0588, "wasted_travel": 0.1702},
+  {"foresight": 0.8, "late": 1.0204,
+   "times": [1.0, 1.0002, 1.0164, 1.0414, 1.0654, 1.0823],
+   "wasted": 0.1096, "wasted_travel": 0.2181},
+  {"foresight": 0.8, "late": 3.0612,
+   "times": [1.0, 1.0002, 1.0165, 1.0415, 1.064, 1.0844],
+   "wasted": 0.1163, "wasted_travel": 0.2219},
+  {"foresight": 0.8, "late": 4.0816,
+   "times": [1.0, 1.0002, 1.0165, 1.0415, 1.064, 1.0844],
+   "wasted": 0.1163, "wasted_travel": 0.2219},
+  {"foresight": 0.8, "late": None,
+   "times": [1.0, 1.0002, 1.0165, 1.0415, 1.064, None],
+   "wasted": 0.0865, "wasted_travel": 0.1577},
+  {"foresight": 0.95, "late": 0.0,
+   "times": [1.0, 0.9999, 0.995, 1.0009, 1.0127, 1.0333],
+   "wasted": 0.0099, "wasted_travel": 0.0696},
+  {"foresight": 0.95, "late": 0.0306,
+   "times": [1.0, 1.0, 0.9954, 0.9993, 1.0116, 1.0228],
+   "wasted": 0.0126, "wasted_travel": 0.071},
+  {"foresight": 0.95, "late": 0.102,
+   "times": [1.0, 1.0, 0.9963, 0.998, 1.0063, 1.0095],
+   "wasted": 0.0176, "wasted_travel": 0.0797},
+  {"foresight": 0.95, "late": 0.3061,
+   "times": [1.0, 1.0, 0.999, 1.0013, 1.0056, 1.0156],
+   "wasted": 0.0296, "wasted_travel": 0.1106},
+  {"foresight": 0.95, "late": 1.0204,
+   "times": [1.0, 1.0, 1.0057, 1.0169, 1.0287, 1.0431],
+   "wasted": 0.0587, "wasted_travel": 0.1626},
+  {"foresight": 0.95, "late": 3.0612,
+   "times": [1.0, 1.0, 1.0058, 1.0178, 1.0306, 1.0481],
+   "wasted": 0.0635, "wasted_travel": 0.1703},
+  {"foresight": 0.95, "late": 4.0816,
+   "times": [1.0, 1.0, 1.0058, 1.0178, 1.0306, 1.0481],
+   "wasted": 0.0635, "wasted_travel": 0.1703},
+  {"foresight": 0.95, "late": None,
+   "times": [1.0, 1.0, 1.0058, 1.0178, 1.0306, None],
+   "wasted": 0.0443, "wasted_travel": 0.111},
+  {"foresight": 0.99, "late": 0.0,
+   "times": [1.0, 0.9999, 0.9951, 1.013, 1.0359, 1.0943],
+   "wasted": 0.0084, "wasted_travel": 0.0996},
+  {"foresight": 0.99, "late": 0.0306,
+   "times": [1.0, 0.9999, 0.9951, 1.0081, 1.0261, 1.0701],
+   "wasted": 0.0093, "wasted_travel": 0.0874},
+  {"foresight": 0.99, "late": 0.102,
+   "times": [1.0, 0.9999, 0.995, 1.0011, 1.0169, 1.0505],
+   "wasted": 0.0125, "wasted_travel": 0.089},
+  {"foresight": 0.99, "late": 0.3061,
+   "times": [1.0, 1.0, 0.9955, 0.9973, 1.0057, 1.0146],
+   "wasted": 0.0164, "wasted_travel": 0.0831},
+  {"foresight": 0.99, "late": 1.0204,
+   "times": [1.0, 1.0, 0.998, 0.9995, 1.0037, 1.0185],
+   "wasted": 0.0294, "wasted_travel": 0.115},
+  {"foresight": 0.99, "late": 3.0612,
+   "times": [1.0, 1.0, 0.998, 0.9996, 1.0033, 1.0136],
+   "wasted": 0.0295, "wasted_travel": 0.111},
+  {"foresight": 0.99, "late": 4.0816,
+   "times": [1.0, 1.0, 0.998, 0.9996, 1.0033, 1.0136],
+   "wasted": 0.0295, "wasted_travel": 0.111},
+  {"foresight": 0.99, "late": None,
+   "times": [1.0, 1.0, 0.998, 0.9996, 1.0033, None],
+   "wasted": 0.0196, "wasted_travel": 0.0632},
+  {"foresight": 1.0, "late": 0.0,
+   "times": [1.0, 0.9999, 0.9952, 1.0353, 1.1534, 1.3119],
+   "wasted": 0.0, "wasted_travel": 0.0},
+ ],
+ "even_starts": [0.4813, 0.9402, 1.142, 1.2451, 1.3217, 1.4052],
+}
+
+STILL_FIELDS = {"random": STILL_FIELD, "even": STILL_FIELD_EVEN}
+
 
 def _line(x, x0, x1, y0, y1):
     """The straight line through two points, read at x."""
     return y0 if x1 == x0 else y0 + (y1 - y0) * (x - x0) / (x1 - x0)
 
 
-def still_field(per_probe: float, foresight: float, late) -> dict:
-    """Read STILL_FIELD for a fleet with so many systems per probe, whose
-    probes foresee this share of each other's choices and receive
-    completion records `late` share times after the event (None: never).
+def still_field(per_probe: float, foresight: float, late,
+                starts: str = "random") -> dict:
+    """Read the table of STILL_FIELDS for this way of starting, for a
+    fleet with so many systems per probe, whose probes foresee this share
+    of each other's choices and receive completion records `late` share
+    times after the event (None: never).
 
     Returns, for every level of the table, the spacings traveled and the
     stays made per system and probe until that share of the systems is
     done; the share of visits wasted; the spacings traveled in vain per
     system; and whether the last level stands for 99.99 percent because
     the very last systems would be found only by chance."""
-    table = STILL_FIELD
+    table = STILL_FIELDS[starts]
     levels = table["levels"]
     count = len(levels)
     # what one probe needs for its share at the base, in share times
@@ -1855,9 +1998,10 @@ def _unused_inputs(sc: Scenario, layout: dict, gal: dict) -> list:
              "follows from the age of a probe's knowledge, not from the "
              "number of neighboring probes")
     else:
-        note("confidence",
-             "it applies where completion is recorded by system (the "
-             "strategies %s)" % " and ".join(RECORDS_BY_SYSTEM))
+        for name in ("confidence", "starts"):
+            note(name,
+                 "it applies where completion is recorded by system (the "
+                 "strategies %s)" % " and ".join(RECORDS_BY_SYSTEM))
     return unused
 
 
@@ -1939,9 +2083,10 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
                                                      accel)
         # Where the stars stand still a probe clears its own share among
         # neighbors doing the same; its hops are those of the simulation
-        # (STILL_FIELD), a little longer than on a route through a field
+        # (STILL_FIELDS), a little longer than on a route through a field
         # it has to itself.
-        share_scale = hop_scale * STILL_FIELD["hop"] / CLEARED_FIELD_HOP
+        share_scale = (hop_scale * STILL_FIELDS[sc.starts]["hop"]
+                       / CLEARED_FIELD_HOP)
         share_hop_m = share_scale * at_large["mean_spacing_pc"] * PARSEC_M
         share_first_s, share_cruise = mean_hop_seconds(at_large, share_scale,
                                                        v, accel)
@@ -2105,7 +2250,7 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
         spacing_s = still_hop_m / CLEARED_FIELD_HOP / v
         read = still_field(visited_per_probe, sc.confidence,
                            None if math.isinf(tau_s)
-                           else tau_s / share_time_s)
+                           else tau_s / share_time_s, sc.starts)
         marks = [0.0] + read["levels"]
         wasted_per_system = read["wasted"] / (1.0 - read["wasted"])
         # Every hop, wasted or not, costs the time to speed up and slow
@@ -2205,8 +2350,22 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
                     (1.0 - mixed) * high
                     + mixed * mixed_seconds(share)) / YEAR_S
                 equal_work["%g" % share] = core(share) / YEAR_S
+        # the same survey from the other way of starting, for the report
+        other_starts = None
+        if detail and _compare and mixed < 0.5:
+            name = "random" if sc.starts == "even" else "even"
+            other = derive(replace(sc, starts=name), detail=False,
+                           _compare=False)
+            other_starts = dict(
+                starts=name, total_years=other["total_years"],
+                years_to_99_percent=next(
+                    (m["years"] - other["phases"]["dispersal_years"]
+                     for m in other["milestones"] if m["fraction"] == 0.99
+                     and m["years"] is not None), None))
         still = dict(
             weight=1.0 - mixed,
+            starts=sc.starts,
+            other_starts=other_starts,
             equal_count_years=equal_count,
             equal_work_years=equal_work,
             share_time_years=share_time_s / YEAR_S,
@@ -2836,10 +2995,15 @@ def describe_reached(r: dict, canonical: bool = False) -> list:
                 "simulation that follows single probes (plan0_sim.py): each "
                 "probe first clears the systems nearest its own starting "
                 "point, then goes wherever it knows of systems still to do. "
-                "Its hops are %s mean spacings on average. The starting "
-                "points fall at random, so the shares are uneven, and the "
+                "Its hops are %s mean spacings on average. %s, and the "
                 "survey ends when the largest are done."
-                % (percent(mixing["crossings"]), sig(STILL_FIELD["hop"], 2)))
+                % (percent(mixing["crossings"]),
+                   sig(STILL_FIELDS[sc["starts"]]["hop"], 2),
+                   "The probes start spread evenly, one to a region of its "
+                   "own, so the shares differ only by chance, by about a "
+                   "tenth" if sc["starts"] == "even" else
+                   "The starting points fall at random, so the shares are "
+                   "uneven"))
         elif mixing["share"] < 0.995:
             lines += fill(
                 "The stars mix only in part during a survey this short: a "
@@ -3081,25 +3245,35 @@ def describe_left_out(r: dict, canonical: bool = False) -> list:
     if still and still["equal_count_years"]:
         equal = still["equal_count_years"]
         levels = still["equal_work_years"]
+        even = still["starts"] == "even"
         balance = (
             "Balance. Every probe is given the same amount of work, so a "
-            "probe has fewer systems where they lie far apart. The uneven "
-            "shares that starting points drawn at random give on top of "
-            "that are in the figures. If every probe were given the same "
-            "number of systems instead, the outer parts of the galaxy, "
-            "where systems lie far apart, would lag: 99%% of the systems "
-            "would be done %s into the survey and 99.9%% after %s, against "
-            "%s and %s. The starting points are taken as drawn at random, "
-            "the less favorable case. Physical Layer 4.5 spreads them "
-            "evenly, one probe to a region of its own: a probe then needs "
-            "to know nothing of the others, and 99%% of the systems would "
-            "be done %s into the survey (simulated)."
-            % (fmt_duration(equal["0.99"], canonical),
+            "probe has fewer systems where they lie far apart. %s If every "
+            "probe were given the same number of systems instead, the "
+            "outer parts of the galaxy, where systems lie far apart, would "
+            "lag: 99%% of the systems would be done %s into the survey and "
+            "99.9%% after %s, against %s and %s."
+            % ("The probes start spread evenly, one to a region of its "
+               "own (Physical Layer 4.5); the regions are taken as equal "
+               "in size, so that chance still leaves their shares a tenth "
+               "apart, which is in the figures." if even else
+               "The uneven shares that starting points drawn at random "
+               "give on top of that are in the figures.",
+               fmt_duration(equal["0.99"], canonical),
                fmt_duration(equal["0.999"], canonical),
                fmt_duration(levels["0.99"], canonical),
-               fmt_duration(levels["0.999"], canonical),
-               fmt_duration(STILL_FIELD["even_starts"][2]
-                            * still["share_time_years"], canonical)))
+               fmt_duration(levels["0.999"], canonical)))
+        other = still["other_starts"]
+        if other is not None and other["years_to_99_percent"] is not None:
+            balance += (
+                " %s 99%% of the systems would be done %s into the survey "
+                "(simulated)."
+                % ("With starting points drawn at random (--starts random)"
+                   if even else
+                   "The starting points are taken as drawn at random. "
+                   "Spread evenly, one probe to a region of its own, as "
+                   "Physical Layer 4.5 has it,",
+                   fmt_duration(other["years_to_99_percent"], canonical)))
     else:
         balance = (
             "Balance. The milestones assume every probe ends with an equal "
@@ -3329,6 +3503,10 @@ def render_report(r: dict, canonical: bool = False) -> str:
     for line in _wrap("Strategy:", "%s - %s" % (r["strategy"],
                                                 STRATEGIES[r["strategy"]])):
         add(line)
+    if r["still"] is not None:
+        for line in _wrap("Starts:", "%s - %s" % (sc["starts"],
+                                                  STARTS[sc["starts"]])):
+            add(line)
     add("")
     if r["fleet_exhausted"]:
         add("HEADLINE:   the survey never finishes (fleet exhausted)")
@@ -3858,6 +4036,10 @@ def render_explain(r: dict) -> str:
             "times of the" % still["weight"],
             "  simulation of single probes, read from the table in this "
             "file",
+            "  for probes that start %s" % (
+                "spread evenly, one to a region of its own"
+                if still["starts"] == "even" else
+                "at points drawn at random"),
             "  share time = systems per probe x (0.78 x time per spacing + "
             "stay) = %.4g years" % still["share_time_years"],
             "  foresight %.3g; records late by %s share times; %.4g systems "
@@ -4149,6 +4331,12 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--strategy", choices=list(STRATEGIES), metavar="NAME",
                    help="way of running the survey; see the list below "
                         "(default systems, as the specification has it)")
+    g.add_argument("--starts", choices=list(STARTS), metavar="NAME",
+                   help="where the probes start: even, one probe to a "
+                        "region of its own (default, as the specification "
+                        "has it), or random, at points drawn at random. It "
+                        "matters where every probe has few systems and the "
+                        "stars hardly move while it surveys them")
 
     g = p.add_argument_group("archives and communication")
     g.add_argument("--archives", choices=sorted(ARCHIVE_PRESETS),
