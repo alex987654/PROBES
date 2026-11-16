@@ -26,7 +26,7 @@ The runs themselves are stored beside it, in `results.jsonl`.
 ## The findings in brief
 
 1. **The survey is one percent of the mission.** Before any probe may
-   begin, the fleet scatters across the disc for 978,000 years (Physical
+   begin, the fleet scatters across the disc for 979,000 years (Physical
    Layer section 4.5). After that, 99 percent of the systems are
    surveyed within about 6,800 years and the last one after about 7,800.
    The cases below lie between 6,500 and 23,300 years, in a mission of a
@@ -92,7 +92,7 @@ default:
 | Stay per system | 10 years |
 | Distance between neighboring systems | 1.6 parsecs at the median, 2.0 on average |
 | One hop from system to system | about 50 years |
-| Scattering before the survey | 978,000 years |
+| Scattering before the survey, refuelling stops included | 979,000 years |
 | Survey after that | about 8,000 years |
 | What a star moves in 8,000 years, against its neighbors | 0.2 to 0.5 parsecs |
 
@@ -472,7 +472,7 @@ from the moment the survey starts.
 | own cell only | 3,100 | 11,700 | 15,500 | 23,600 |
 | own cell only, starts spread evenly | 3,000 | 7,000 | 7,600 | 8,600 |
 
-The survey starts 978,000 years after departure. Against that the plan
+The survey starts 979,000 years after departure. Against that the plan
 adds 1 percent and the slowest case in the table 4 percent: the mission
 lasts about a million years whatever the probes know.
 
@@ -499,10 +499,10 @@ drawn at random (`--starts random`):
 
 | | Years after departure | Years after the survey starts | The same, starts at random |
 | --- | --- | --- | --- |
-| Half of the systems | 981,400 | 3,000 | 3,000 |
-| 90 percent | 984,300 | 5,800 | 6,000 |
-| 99 percent | 985,300 | 6,800 | 7,200 |
-| Every system: the end of the mission | 986,400 | 7,900 | 8,700 |
+| Half of the systems | 982,400 | 3,000 | 3,000 |
+| 90 percent | 985,300 | 5,800 | 6,000 |
+| 99 percent | 986,300 | 6,800 | 7,200 |
+| Every system: the end of the mission | 987,400 | 7,900 | 8,700 |
 
 The calculator's figures differ from those of the previous section by up
 to a hundred years. It counts travel and stays separately, at the mean
