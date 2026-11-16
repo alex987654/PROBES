@@ -3363,6 +3363,14 @@ def describe_left_out(r: dict, canonical: bool = False) -> list:
             "for probes that first clear the systems nearest their own "
             "starting point. A wasted visit is counted without a stay: the "
             "probe finds on arrival that the system is done.")
+        if r["still"]["records_by_beam"]:
+            duplication += (
+                " In that simulation every probe hears of a finished "
+                "system at the speed of light, however far away. The "
+                "specification relays a record over two hops at most, "
+                "about two probe spacings (Physical Layer 4.3); the probes "
+                "that could go to the same system lie within that range, "
+                "but the limit itself is not simulated.")
     elif r["knowledge"] is not None:
         duplication = (
             "Duplication. The duplicated work follows from the age of a "

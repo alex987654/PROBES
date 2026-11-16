@@ -3149,7 +3149,9 @@ class TestStillField(unittest.TestCase):
                        "A probe beams the record of every system it "
                        "finishes to the 6 probes around it and to its "
                        "nearest archive station",
-                       "every message sent 7 times"]:
+                       "every message sent 7 times",
+                       "The specification relays a record over two hops "
+                       "at most, about two probe spacings"]:
             self.assertIn(phrase, text)
         carried = " ".join(pp.render_report(pp.derive(pp.Scenario(
             neighbor_beams=False))).split())
@@ -3159,6 +3161,7 @@ class TestStillField(unittest.TestCase):
                        "gives"]:
             self.assertIn(phrase, carried)
         self.assertNotIn("by beam", carried)
+        self.assertNotIn("relays a record over two hops", carried)
         self.assertNotIn("the estimate sits at its ceiling", text)
         self.assertEqual(banned_tokens(text), [])
         explain = pp.render_explain(pp.derive(pp.Scenario()))
