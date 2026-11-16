@@ -2,7 +2,7 @@
 
 ## Version 1.0.0
 
-*How ten thousand probes can physically exchange PROBES CNL
+*How a billion probes can physically exchange PROBES CNL
 messages across a galaxy, what that architecture demands of the
 language, and which demands were considered and rejected. All
 technology anchors are flown systems or historically discussed
@@ -17,16 +17,19 @@ companion `PROBES_CNL_Transport_Layer.md`.*
 
 | Quantity | Value | Consequence |
 |---|---|---|
-| Survey disc radius | ≈ 15 kiloparsecs (kpc) ≈ 4.6×10²⁰ m | — |
-| Probes | 10⁴ | mean area per probe ≈ 0.07 kpc² |
-| Mean neighbor spacing s | ~0.27 kpc ≈ 8×10¹⁸ m | light travel time per spacing T_e ≈ 880 years |
-| Probe cruise speed (studied concepts, 0.05–0.1 c) | nominal 0.05 c | probe transit per spacing T_t ≈ 1.8×10⁴ years |
-| Consolidation cadence T_c | ~10⁴ years (≈ one probe transit) | archives supersede gossip on this clock |
-| Fleet-crossing light time | ~10⁵ years | — |
+| Survey disc radius | ≈ 15 kiloparsecs (kpc) ≈ 4.6×10²⁰ m | crossing the disc takes ≈ 10⁶ years at nominal speed |
+| Probes | 10⁹ | ≈ 100 star systems and ≈ 500 cubic parsecs per probe; the fleet fills the disc, ≈ 90 probes deep |
+| Mean neighbor spacing s | ≈ 8 parsecs (pc) ≈ 2.4×10¹⁷ m | light travel time per spacing T_e ≈ 26 years |
+| Probe cruise speed (studied concepts, 0.05–0.2 c) | nominal 0.1 c | probe transit per spacing T_t ≈ 260 years |
+| Survey after activation | ≈ 8×10³ years | a star moves < 1 pc meanwhile: the field stands still |
+| Custodial nodes | ≈ 10⁶, one to ≈ 10³ probes | node spacing ≈ 10 s ≈ 80 pc ≈ 2.4×10¹⁸ m; light travel time ≈ 260 years |
+| Consolidation cadence T_c | ~10⁴ years (≈ the survey itself) | archives record the survey; they do not steer it |
+| Fleet-crossing light time | ~10⁵ years | no fact reaches the whole fleet while the survey lasts |
 
 **The controlling fact: every exchange is a monologue.** With
-century-scale one-way latency, there are no handshakes, no
-acknowledgments, no retransmission requests, no negotiation.
+one-way latency of decades to a neighbor and centuries to a
+node, there are no handshakes, no acknowledgments, no
+retransmission requests, no negotiation.
 Every message must be complete, self-contained, and
 self-describing on arrival — which is precisely the design
 posture PROBES CNL inherited from BEYOND, now revealed as a
@@ -48,28 +51,44 @@ approach distances.
 
 ### 2.2 Optical (flown demonstration, studied at range)
 
-Deep-space optical communication was demonstrated operationally
-in 2023 beyond 2 astronomical-unit-class distances, and
+Deep-space optical communication was demonstrated in flight
+from 2023 and, in 2024, across more than 3 astronomical units, and
 laser-link scaling to interstellar ranges was studied in the
 historically discussed literature on beamed-sail probe concepts.
 An order-of-magnitude budget for neighbor-to-neighbor contact:
 
-- 10 m transmit and receive apertures, 1 kW at ~1 μm
-- diffraction-limited divergence θ ≈ λ/D ≈ 10⁻⁷ rad
-- spot radius at 8×10¹⁸ m ≈ 8×10¹¹ m
-- captured fraction ≈ (5 m / 8×10¹¹ m)² ≈ 4×10⁻²³
-- received power ≈ 4×10⁻²⁰ W ≈ 0.2 photons per second
+- 1.7 m transmit and receive apertures, 1 kW at ~1 μm
+- diffraction-limited divergence θ ≈ λ/D ≈ 6×10⁻⁷ rad
+- spot radius at 2.4×10¹⁷ m ≈ 1.4×10¹¹ m
+- on-axis captured fraction (π·D_t·D_r / 4λd)² ≈ 9×10⁻²³
+- received power ≈ 9×10⁻²⁰ W ≈ 0.4 photons per second
 
-With photon-starved pulse-position modulation, that supports
-**of order 0.1–1 bit per second, best case, between fixed and
-mutually known endpoints** — before pointing losses.
+With photon-starved pulse-position modulation — at most 8 bits
+per detected photon in the 256-slot format, before coding
+overhead — that supports **of order 0.1–1 bit per second, best
+case, between mutually known endpoints** — before pointing
+losses. The rate goes as (D_t·D_r / d)². A custodial node lies
+≈ 5 spacings from a probe and ≈ 10 from the next node (§3.2);
+with 10 m apertures at the nodes, both of those links hold
+about the same rate or better.
 
 Two conclusions fall straight out:
 
-1. **Beams point at catalogued fixed nodes, not at moving
-   probes.** A probe cannot maintain ephemerides for 9,999
-   moving peers across centuries; it can point at a catalogued
-   cache node forever.
+1. **Beams point at catalogued nodes, and at a probe whose
+   stops the sender can work out.** A probe cannot maintain
+   ephemerides for 10⁹ moving peers; it can hold the catalogued
+   position and velocity of a cache node, and it can derive
+   from `PROC-1` the star at which a neighbor will be. Nodes
+   are not at rest: they share the motion of their host stars,
+   tens of kilometers per second relative to one another.
+   Across the ≈ 260-year light time between two nodes, a
+   transverse 30 km/s amounts to ≈ 1,600 astronomical units, a
+   thousand radii of a node's beam, so pointing ahead needs
+   relative velocities to ≈ 30 m/s — a `CAT-CCH` entry, refined
+   at every consolidation cycle. A probe's beam is six times as
+   wide and needs the velocity of the star at which its
+   neighbor stops to ≈ 180 m/s — a `CAT-TGT` entry (CONS-4,
+   Grammar §5.4a).
 2. **The wire form is not an optimization; it is the channel's
    admission ticket.** At bits per second, a 500-byte PROBES-W
    survey message costs about an hour of link time; the same
@@ -104,7 +123,7 @@ message media and, optionally, a low-power custodial device.
 | Tier | What | Where | Power |
 |---|---|---|---|
 | **L1 — custodial archive nodes** | active nodes: consolidation, manifest broadcasts, scrubbing, inter-node beaming | wide orbits of quiescent, long-lived low-mass stars in inter-arm disc regions | stellar flux (photovoltaic/thermal) |
-| **L2 — passive caches** | unattended media deposit sites on survey routes | anywhere dynamically stable, including deep interstellar space | none (double replication, Transport §5) |
+| **L2 — passive caches** | unattended media deposit sites on survey routes | in the surveyed system itself where it meets criterion 1, so that a deposit costs no side trip; otherwise anywhere dynamically stable, including deep interstellar space | none (double replication, Transport §5) |
 | **L3 — cold vaults** | write-rarely archive replicas for deep time | long-period halo orbits, far from disc traffic and hazards | none |
 
 The tier is an attribute in `CAT-CCH`, not a grammar
@@ -132,9 +151,13 @@ manifest register, and templates.
    weak fields; nodes avoid close orbits of massive or compact
    objects so local clock offsets stay inside the timing-model
    budget (`PROC-NAV`).
-6. **Graph placement.** Node spacing tracks probe spacing s so
-   the relay analysis of §4 holds; shard hosts ≥ 2 graph edges
-   apart (Transport §6).
+6. **Graph placement.** ≈ 10⁶ custodial nodes, one to ≈ 10³
+   probes: node spacing ≈ 10 s ≈ 80 pc, within the reach of the
+   link budget for a probe's beam and for the next node's
+   (§2.2). The nodes keep the archive and do not steer the
+   survey (§1), so their number follows from link range and
+   from the safe keeping of the records, not from the probe
+   spacing; shard hosts ≥ 2 graph edges apart (Transport §6).
 
 Net result: the engineering optimum is the calm mid-disc
 annulus between spiral arms — old stars, low supernova rate,
@@ -170,8 +193,9 @@ documents cited per item):
   (and single capital letters are not tokens); stars are
   characterized numerically: effective temperature in kelvin,
   luminosity in watts, mass in grams.
-- **ORG-3:** structural catalogues (`CAT-CCH`, `CAT-REG`) carry
-  no establishment, founding, or first-visit epochs.
+- **ORG-3:** structural catalogues (`CAT-CCH`, `CAT-REG`,
+  `CAT-TGT`) carry no establishment, founding, or first-visit
+  epochs.
 - Gravitational-potential and beacon-geometry criteria touch
   `PROC-NAV` budgets and `CAT-CCH` schema — catalogue content,
   zero grammar.
@@ -192,21 +216,21 @@ future reader.
 
 ## 4. Store-and-Forward Topology and the Hop Limit — Derivation
 
-Traffic pattern: **probe → cache → probe**, occasionally
-**probe → cache → probe → cache**, with custodial nodes also
-beaming to adjacent nodes. The E-RLY rule (warning at hops=2,
-rejection at hops≥3) is derived here rather than assumed. One
-clarification first: **the limit is not about
-fidelity.** Digest citation (E-RLY-3) makes relaying lossless,
-so h could be 50 without corrupting a byte. The limit is about
-three things that all worsen with h — channel economics,
-adversarial containment, and topology privacy — against one
-benefit that saturates.
+Traffic pattern: **probe → neighboring probe** and **probe →
+cache → probe**, occasionally **probe → cache → probe →
+cache**, with custodial nodes also beaming to adjacent nodes.
+The E-RLY rule (warning at hops=2, rejection at hops≥3) is
+derived here rather than assumed. One clarification first:
+**the limit is not about fidelity.** Digest citation (E-RLY-3)
+makes relaying lossless, so h could be 50 without corrupting a
+byte. The limit is about three things that all worsen with h —
+channel economics, adversarial containment, and topology
+privacy — against one benefit that saturates.
 
 ### 4.1 What relaying is for
 
 Gossip (E-RLY) exists to move **coordination-relevant facts**
-— region completions (E-ACT), local hazards, cache manifests —
+— survey completions (E-ACT), local hazards, cache manifests —
 to the probes that can act on them *sooner than the archive
 cycle would*. Everything else (science payloads, beacon timing
 models, resource surveys) is archive traffic (E-RPT), which has
@@ -214,60 +238,75 @@ its own provenance chain and no gossip role.
 
 ### 4.2 The audience of a coordination fact
 
-Take the canonical case: probe A completes region R and
-deposits the E-ACT record at its nearest node. Who needs it?
-Exactly the probes that might otherwise duplicate R: those able
-to reach and select R within one planning horizon. A probe
-farther than ~2 spacings needs ≥ 2s / v ≈ 3.5×10⁴ years just
-to arrive — by which time the fact has passed through at least
-one consolidation cycle (T_c ≈ 10⁴ yr) and sits in the
-coverage archive at that probe's *own* local node. So the
-**relevance radius of gossip is R_rel ≈ 2s**: inside it, gossip
-beats the archive; outside it, the archive has already won.
+Take the canonical case: probe A completes a system and beams
+the E-ACT record to its neighbors and to its nearest node. Who
+needs it? Exactly the probes that might otherwise go to that
+system. A probe works its own region first and then takes the
+nearest system it does not hold to be surveyed (Overview §3.2),
+so the systems of A's region fall to A or, where A lags or is
+lost, to the probes around it. Those lie about one spacing from
+the region and within ~2 spacings of one another. A probe
+farther out has open systems nearer by, in its own region and
+around it, and by the time it has none the probes next to A's
+region have had the same choice for as long and from closer. So
+the **relevance radius of gossip is R_rel ≈ 2s**: inside it a
+fact changes what a probe does next; outside it nothing depends
+on the fact.
+
+The archive does not shorten that radius: T_c is as long as the
+survey (§1), so no coverage archive reaches a probe while work
+is left. In a fleet whose survey outlasts many cycles the
+archive sets the radius instead — gossip then matters only
+where a probe can act before the archive delivers the fact,
+within ≈ k·T_c / T_t spacings for an archive that needs k
+cycles.
 
 ### 4.3 Benefit and cost as functions of h
 
-The node graph is approximately planar with degree d ≈ 6; a
-fact relayed to graph distance h covers a disc of radius ≈ h·s.
+The fleet fills the disc, so the graph of neighboring probes is
+three-dimensional: on a regular lattice a probe has six nearest
+neighbors (degree d ≈ 6), and a fact relayed to graph distance
+h covers a ball of radius ≈ h·s.
 
-| h | Competitor disc covered (≈ min(1,(h/2)²)) | Marginal benefit | Per-node relay load (∝ h²) | Single-source contamination radius | Propagation-tree evidence at any node |
+| h | Competitor ball covered (≈ min(1,(h/2)³)) | Marginal benefit | Per-probe relay load (∝ h³) | Single-source contamination radius | Propagation-tree evidence at any node |
 |---|---|---|---|---|---|
-| 1 | ~25% | — | 1× | s (~7 nodes) | 1 edge |
-| **2** | **~100%** | **+75 points** | **4×** | **2s (~19 nodes)** | **2 edges** |
-| 3 | 100% (audience beyond 2s is stale) | ~0 | 9× | 3s (~37 nodes) | 3 edges |
-| 5 | 100% | ~0 | 25× | 5s (~91 nodes) | 5 edges |
+| 1 | ~12% | — | 1× | s (~7 probes) | 1 edge |
+| **2** | **~100%** | **+88 points** | **8×** | **2s (~33 probes)** | **2 edges** |
+| 3 | 100% (nothing beyond 2s depends on the fact) | ~0 | 27× | 3s (~120 probes) | 3 edges |
+| 5 | 100% | ~0 | 125× | 5s (~500 probes) | 5 edges |
 
-**Why not h = 1.** Coverage of the competitor disc is ~25%:
+**Why not h = 1.** Coverage of the competitor ball is ~12%:
 most probes that could collide with A's work never hear of it
-before choosing. Expected duplication is material — a
-duplicated region survey costs centuries of probe time plus a
-stellar refueling stop (§6), among the most expensive waste the
-fleet can generate. The dedup benefit between h=1 and h=2 is
-the whole point of having relay at all.
+before choosing. Expected duplication is material — a visit to
+a system already surveyed costs ≈ 50 years of probe time plus a
+stellar refueling stop (§6), and around a lost probe's region a
+hundred systems are shared out among probes that are mostly not
+each other's nearest neighbors. The dedup benefit between h=1
+and h=2 is the whole point of having relay at all.
 
-**Why not h = 3–5.** The audience gained beyond 2s cannot act
-on the fact faster than the archive delivers it (§4.2):
-marginal benefit ≈ 0. Meanwhile every cost keeps climbing on
-the photon-starved links where each relayed clause displaces
-original content: relay load grows as h², a compromised probe's
-false-but-well-formed facts (grammar cannot stop a lie, only an
-unverifiable one) quarantine at radius h·s instead of 2s, and
-each additional hop extends the propagation-tree evidence an
-interceptor at one cache can reconstruct about fleet topology.
-Benefits saturate at h=2; every cost is monotone increasing —
-the knee is at 2.
+**Why not h = 3–5.** The audience gained beyond 2s has no use
+for the fact (§4.2): marginal benefit ≈ 0. Meanwhile every cost
+keeps climbing on the photon-starved links where each relayed
+clause displaces original content: relay load grows as h³, a
+compromised probe's false-but-well-formed facts (grammar cannot
+stop a lie, only an unverifiable one) quarantine at radius h·s
+instead of 2s, and each additional hop extends the
+propagation-tree evidence an interceptor at one cache can
+reconstruct about fleet topology. Benefits saturate at h=2;
+every cost is monotone increasing — the knee is at 2.
 
 **Why the warning band at h = 2.** Hop 2 is legal-but-flagged
-because it is the boundary case: content at hop 2 is due for
-archive supersession within one consolidation cycle, and the
-flag tells receivers "verify against the next archive before
-building on this."
+because it is the boundary case: content at hop 2 has reached
+the edge of its audience and is the next archive's to
+supersede, and the flag tells receivers "verify against the
+next archive before building on this."
 
-The limit and the cadence are a matched pair: **h_max =
-⌈R_rel / s⌉ = 2 holds because T_c ≈ T_t.** If the fleet ever
-retunes consolidation cadence or probe speeds change the
-transit time materially, h_max is re-derived from the same
-inequality — the number 2 is a consequence, not a constant of
+The limit and the regime are a matched pair: **h_max =
+⌈R_rel / s⌉ = 2 holds because the survey ends within one
+consolidation cycle, among stars that stand still.** If the
+fleet were so much smaller that its survey outlasted many
+cycles, R_rel and h_max would be re-derived from the inequality
+of §4.2 — the number 2 is a consequence, not a constant of
 nature.
 
 ### 4.4 Adversarial containment (the quarantine argument)
@@ -275,7 +314,7 @@ nature.
 The grammar excludes manipulation *vocabulary*, but a
 compromised probe can still emit false measurements in perfect
 PROBES CNL. The hop limit is the containment vessel: a false
-fact reaches at most ~19 nodes before the consolidation cycle
+fact reaches at most ~33 probes before the consolidation cycle
 applies the corroboration rule — **CONS-2:** archive entries
 carry corroboration counts (independent originating senders per
 claim, an ordinary E-AGG `n=`), and uncorroborated singletons
@@ -292,7 +331,7 @@ mid-disc radius). Nothing in any message names that place — but
 **activity patterns can betray what vocabulary cannot**:
 
 - *Wavefront attack:* coverage archives sampled at two epochs
-  show a growing disc of completed regions; fitting circles to
+  show a growing disc of surveyed systems; fitting circles to
   the two fronts locates the common center — the entry point.
   This works even with perfect per-message origin erasure.
 - *Founding-order attack:* cache establishment dates, earliest
@@ -302,23 +341,33 @@ mid-disc radius). Nothing in any message names that place — but
 Countermeasures, in force from the first transmitted bit:
 
 1. **Dispersal doctrine (`PROC-DSP`).** Before survey
-   operations begin, every probe transits to a seed region
-   assigned by a deterministic, public function of its random
-   probe identifier and catalogue constants — uniform over the
-   tessellation, blind to entry proximity. Survey then grows
-   from 10⁴ scattered seeds, and the activity pattern is
-   statistically homogeneous from the first message: there is
-   no front to fit. **DSP-1:** no messages during dispersal.
-   **DSP-2:** no message-recorded observations during dispersal
-   (transit navigation is journal-local); recorded survey
-   begins at the seed. **DSP-3:** message emission fleet-wide
-   begins at a catalogue activation epoch `T_act` ≥ the
-   dispersal envelope. The cost is real — of order 3×10⁵ years
-   of unrecorded transit at nominal speed for the mean ≈ 10 kpc
-   dispersal leg — and it is the price of an origin-free sky.
-   The tempting shortcut (each probe takes the *nearest*
-   unclaimed seed) is rejected: it recreates the cluster around
-   the entry that dispersal exists to erase.
+   operations begin, every probe transits to its seed region:
+   the one region that `CAT-REG` pairs with its probe
+   identifier. The tessellation has as many regions as the
+   fleet has probes, each holding equal survey work, and the
+   pairing is drawn at random — one probe per region, blind to
+   entry proximity. Survey then grows from 10⁹ seeds, and the
+   activity pattern is statistically homogeneous from the first
+   message: there is no front to fit. **DSP-1:** no messages
+   during dispersal. **DSP-2:** no message-recorded
+   observations before `T_act` (transit navigation is
+   journal-local); recorded survey begins at the seed, at
+   `T_act`, for every probe alike. **DSP-3:** message emission
+   fleet-wide begins at a catalogue activation epoch `T_act` ≥
+   the dispersal envelope; beacon cycle counts run from that
+   epoch (TIME-1). The envelope is the time of the longest leg
+   possible from any entry point: the disc diameter at the
+   cruise speed, with the refueling stops of such a leg (§6.1).
+   No smaller value is origin-blind: an envelope sized to the
+   fleet's own longest leg would encode the entry radius, and a
+   probe that began recording on arrival would date its first
+   observation by its distance from the entry. The cost is
+   real — every probe waits ≈ 1×10⁶ years at nominal speed
+   (≈ 30 kpc at 0.1 c, with ≈ 100 refueling stops) before its
+   first recorded observation — and it is the price of an
+   origin-free sky. The tempting shortcut (each probe takes the
+   *nearest* unclaimed seed) is rejected: it recreates the
+   cluster around the entry that dispersal exists to erase.
 2. **ORG-3** (§3.3): no establishment epochs in structural
    catalogues.
 3. **CONS-1:** coverage aggregates record completion *status*,
@@ -390,11 +439,14 @@ mission slept 31 months and woke on schedule). None of that
 reaches 10⁴-year cruise legs on stored charge — so the mission
 profile must close the energy loop at stars, and it naturally
 does: **the survey targets are the refueling stops.** The
-region-selection rule (`PROC-1`) selects among unsurveyed
-regions only those reachable within the current energy budget
+target-selection rule (`PROC-1`) selects among unsurveyed
+systems only those reachable within the current energy budget
 `E_leg` — a public catalogue rule evaluated on local state, so
 routing stays sender-invariant without any probe disclosing
-that state.
+that state. Dispersal legs close the loop the same way, with
+one refueling stop per ≈ 10⁴ years of cruise, ≈ 100 on the
+longest leg. These stops fall under DSP-2 and leave no recorded
+observation, and the dispersal envelope counts them (§4.5).
 
 ### 6.2 Storage and fuel
 
@@ -409,9 +461,14 @@ fusion-probe study proposed helium-3 aerostat mining at a giant
 planet, and deuterium is ubiquitous (the fleet measures
 deuterium-to-hydrogen ratios as ordinary survey products — corpus C-28). Icy bodies
 and giant-planet atmospheres are therefore both science targets
-and fuel depots. The open engineering risk, flagged honestly:
-in-situ isotope separation at probe scale is the least-anchored
-element of the whole architecture. Within star systems,
+and fuel depots. The demand is set by the speed: every stop
+costs a velocity change of twice the cruise speed, so at 0.1 c
+a probe leaves each system with ≈ 9.5 times its empty mass even
+at an exhaust speed of 0.089 c, the ideal limit for fusion of
+deuterium and helium-3. The open engineering risk, flagged
+honestly: in-situ isotope separation at probe scale is the
+least-anchored element of the whole architecture. Within star
+systems,
 photovoltaic/thermal power is trivial by comparison (~1.4 kW/m²
 at Sun-like flux distances).
 
@@ -548,6 +605,7 @@ free of covert channels.
 | Sender internal state inexpressible | Grammar SELF-1 (§5.4a) | §6.4 |
 | Cache-maintenance, galactic-structure, and stellar-activity vocabulary; numeric-only stellar characterization | Lexicon §5.1, §5.3, §5.5 | §3.3, §6.4 |
 | Epoch-free structural catalogues and coverage aggregates; corroboration counts; manifest horizon | Grammar ORG-3, CONS-1, CONS-2; custodial rule MAN-H | §4.4, §4.5 |
+| Coverage kept by system; target entries that let a later probe recognize a system and aim a beam at it | Grammar CONS-3, CONS-4 | §2.2, §4.2 |
 | Transport uniformity and quarantine discipline | Transport TR-1 … TR-5 | §7 |
 | Dispersal doctrine `PROC-DSP` (DSP-1…DSP-3, activation epoch) and `PROC-RCH`, `THR-NRG-*` | catalogue content, zero grammar | §4.5, §6.4 |
 
@@ -557,8 +615,9 @@ free of covert channels.
   handshake or acknowledgment forms — physically superfluous
   (§1, §4.5) and safety-positive.
 - **Relay depth ≤ 2 — derived, not assumed.** h_max =
-  ⌈R_rel/s⌉ = 2 under T_c ≈ T_t; a matched pair, re-derivable
-  if cadence or cruise speed change (§4.3).
+  ⌈R_rel/s⌉ = 2 for a survey that ends within one consolidation
+  cycle; re-derivable if fleet size, cadence or cruise speed
+  change (§4.3).
 - **Self-describing lexicon.** Promoted from design goal to
   operational bootstrap requirement; `CAT-SPEC` at every cache
   (§3.3).
@@ -575,8 +634,8 @@ free of covert channels.
 | Acknowledgment / receipt grammar | Manifests already provide receipts as registered facts (§4.5); a dedicated form would add an addressee-shaped speech act the deny-list exists to exclude. |
 | Priority or urgency markers | Urgency vocabulary is alarm vocabulary — inexpressible by design (TH-2/TH-3 threat model). Scheduling relevance derives from catalogue rules applied to registered facts. |
 | Raw onboard-clock timestamps | Frame- and probe-specific; violates sender-invariance; reduce via `PROC-NAV` (§5). |
-| Hop limits above 2 | Benefit saturates at h=2 while relay load, contamination radius, and topology evidence grow as h² (§4.3). |
-| Hop limit of 1 | Leaves ~75% of the competitor disc uninformed; duplicated region surveys are the fleet's most expensive waste (§4.3). |
+| Hop limits above 2 | Benefit saturates at h=2 while relay load, contamination radius, and topology evidence keep growing with h (§4.3). |
+| Hop limit of 1 | Leaves ~88% of the competitor ball uninformed; visits to systems already surveyed are the waste that relay exists to prevent (§4.3). |
 | Nearest-unclaimed-seed dispersal shortcut | Recreates the activity cluster around the entry point that dispersal exists to erase (§4.5). |
 | Stellar classification letter vocabulary | Origin-culture taxonomy; numeric characterization is strictly more precise anyway (§3.3). |
 | Establishment epochs in `CAT-CCH`/`CAT-REG` | Founding-order attack (§4.5); deduplication needs status, not dates. |

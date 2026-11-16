@@ -18,7 +18,7 @@ Version 1.0.0
 
 ## 1. Scenario and Purpose
 
-Ten thousand autonomous probes travel a galaxy to survey its
+A billion autonomous probes travel a galaxy to survey its
 stars, planets, and interstellar medium. Probes exchange messages
 in a controlled natural language directly, through relay chains,
 and through physical caches left at fixed sites.
@@ -143,14 +143,28 @@ No probe can instruct another. Coordination emerges from shared
 facts plus shared deterministic rules:
 
 1. A probe publishes **execution records** (E-ACT, §see grammar
-   doc): "survey of region `REG-4471` completed per `PROC-12`."
-2. The catalogue procedure `PROC-1` (region selection) contains
-   a deterministic rule: from the regions with zero completion
-   records visible to the probe, select by the fixed ordering
-   in `CAT-REG`.
+   doc): "survey of target `TGT-1088` completed per `PROC-12`."
+2. The catalogue procedure `PROC-1` (target selection) contains
+   a deterministic rule. A probe first works its own region,
+   the one `PROC-DSP` seeds it in, and selects the nearest
+   system there that it does not hold to be surveyed. When its
+   region holds none, it selects the nearest such system
+   anywhere within reach.
 
-Every probe applying the same rule to the same facts makes
-compatible choices. No imperative ever crosses the channel.
+Every probe applies the same rule to the same facts. The
+regions keep probes apart without a message, and completion
+belongs to the system. No imperative ever crosses the channel.
+
+The same rule lets a probe conclude what it has no record of.
+From the rule, the regions and the positions of the stars, a
+probe can derive (E-DER) what its neighbors have surveyed and
+will survey: a hundred systems each, well inside the stretch
+for which such a derivation holds. `PROC-1` holds a system to
+be surveyed when a completion record for it is visible, or when
+such a derivation makes its completion at least 0.95 probable.
+The execution record in the archives remains the only proof: a
+derivation that no record has confirmed lapses, and the system
+counts as unsurveyed again.
 
 ---
 
@@ -189,9 +203,10 @@ language.
 ### 4.3 Pulsar Time Standard (PTS) and unit scrub
 
 Epochs are integer cycle counts of registered millisecond-pulsar
-beacons (`BCN-1` … `BCN-8`, catalogued in `CAT-BCN`), quoted
-against at least two beacons for disambiguation. Durations use
-the SI second with prefixes.
+beacons (`BCN-1` … `BCN-8`, catalogued in `CAT-BCN`), counted
+from the fleet-wide activation epoch (Physical Layer document,
+§4.5) and quoted against at least two beacons for
+disambiguation. Durations use the SI second with prefixes.
 
 Every origin-derived unit is removed from the lexicon:
 
@@ -299,18 +314,29 @@ exactly, and the digest is computed over the canonical W-form.
 
 ---
 
-## 9. Companion Tool
+## 9. Companion Tools
 
 `plan0_pace.py` — a stand-alone, dependency-free Python calculator (not part
-of the language specification) that estimates at what pace the 10,000-probe
-fleet could survey this galaxy under `PLAN-0`, for configurable archive
-layouts and the communication regime of the Physical Layer document:
+of the language specification) that estimates at what pace the fleet of a
+billion probes could survey this galaxy under `PLAN-0`, for configurable
+archive layouts and the communication regime of the Physical Layer
+document:
 
 ```
 python plan0_pace.py --help
 ```
 
-Its test suite is `test_plan0_pace.py` (`python -m unittest`).
+`plan0_sim.py` — a stand-alone, dependency-free simulation that follows
+single probes from star system to star system during the survey. The
+calculator takes its figures for the survey phase from it; the runs
+behind them are in `plan0_sim_results/`:
+
+```
+python plan0_sim.py --help
+```
+
+The test suites are `test_plan0_pace.py` and `test_plan0_sim.py`
+(`python -m unittest`).
 
 ---
 

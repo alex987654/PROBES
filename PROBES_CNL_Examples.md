@@ -9,11 +9,11 @@
 ```yaml
 ---
 schema: probes-cnl-v1.0
-message: MSG-9B2E44C7A1D0F358
+message: MSG-94713A3BD66B7E2F
 sender: P-7F3A9C21
 plan: PLAN-0
-epoch: "BCN-3: 8214559102334 + BCN-5: 130995824"
-position: "GSF -8.21e18 2.44e17 6.1e16 meter"
+epoch: "BCN-3: 15050409362501 + BCN-5: 26327013399951"
+position: "GSF 1.46e20 -2.87e20 -3.9e18 meter"
 region: REG-4471
 catalogues:
   CAT-BCN: 14
@@ -62,14 +62,14 @@ hypothesis_space:
   - id: H-2
     statement: "the oxygen fraction follows from biological processes"
     discriminates_via: [MSR-5.1]
-digest: 9b2e44c7a1d0f358aa10b6c94d21e7f3c0884d1a52ef90b7361cd42a8fe15690
+digest: 94713a3bd66b7e2fd518ced24a7b24edf9e402975fcf2be3df4becb1025a41b2
 ---
 ```
 
 ## Execution
 
 ```execution
-The survey of region `REG-4471` reached completion (executed, procedure `PROC-12`, journal `JRN-1`).
+The survey of target `TGT-1088` reached completion (executed, procedure `PROC-12`, journal `JRN-1`).
 The probe deployed lander `LND-1` at `TGT-1088` (executed, procedure `PROC-31`, journal `JRN-1`, steps 1-6).
 ```
 
@@ -106,7 +106,7 @@ The oxygen pattern of `TGT-1088` remains compatible with this candidate (hypothe
   no origin-derived units.
 - **Coordination without tasking.** The E-ACT completion record
   is all another probe needs: applying `PROC-1`'s deterministic
-  region-selection rule to this fact steers it elsewhere. No
+  target-selection rule to this fact steers it elsewhere. No
   imperative crossed the channel.
 - **Bounded interpretation.** The biosignature question lives
   strictly in the Hypothesis register, as two declared,
@@ -122,7 +122,7 @@ v1.0.
 
 ```
 %PW1
-@|SC=1.0|MG=9B2E44C7A1D0F358|SN=P-7F3A9C21|PL=0|EP=B3:8214559102334,B5:130995824|PO=-8.21e18,2.44e17,6.1e16|RG=4471|CT=BCN:14,PRC:9,REG:3,TGT:203|DG=9b2e44c7a1d0f358aa10b6c94d21e7f3c0884d1a52ef90b7361cd42a8fe15690
+@|SC=1.0|MG=94713A3BD66B7E2F|SN=7F3A9C21|PL=0|EP=B3:15050409362501,B5:26327013399951|PO=1.46e20,-2.87e20,-3.9e18|RG=4471|CT=BCN:14,PRC:9,REG:3,TGT:203|DG=94713a3bd66b7e2fd518ced24a7b24edf9e402975fcf2be3df4becb1025a41b2
 D|BCN|0|1|3|5
 D|TGT|1088|1090
 D|INS|CAM-3=N0K|LND-1=N3D|MAG-1=N3H|RX-1=N5A|SPEC-2=N5T
@@ -130,7 +130,7 @@ D|PRC|12|31
 D|JRN|1
 D|HYP|H-1=1|H-2=2
 #|3
-C|A|p=PROC-12|j=JRN-1|T3:N5V;REG-4471
+C|A|p=PROC-12|j=JRN-1|T3:N5V;TGT-1088
 C|A|p=PROC-31|j=JRN-1|st=1-6|T12:N3D;TGT-1088
 #|4
 C|O|v=1|s=CAM-3|T4:N4R;TGT-1090
@@ -146,8 +146,8 @@ C|H|c=H-1|f=MSR-5.1|x=H-2|T9:N4M;TGT-1088
 ```
 
 Header, declarations, section marks, template instances,
-regenerated punctuation: the H-form above (~1,480 bytes)
-round-trips from ~500 bytes of wire.
+regenerated punctuation: the H-form above (~2,220 bytes)
+round-trips from ~780 bytes of wire.
 
 ---
 
@@ -218,12 +218,12 @@ panic it cannot phrase.
 ## 5. Non-Compliant Examples (with failure reasons)
 
 **Tasking another probe.**
-"Probe `P-33D1B2AA` surveys region `REG-0032` next (procedure)."
+"Probe `P-33D1B2AA` surveys target `TGT-2210` next (procedure)."
 — E-PRO-4: a procedure may not name another probe as actor;
 also fails O-1/O-2 (procedure outside an ordered list).
 
 **Second-hand action as bare fact.**
-"Probe `P-33D1B2AA` completed the survey of `REG-0032`
+"Probe `P-33D1B2AA` completed the survey of `TGT-2210`
 (observed, `RX-1`)." — E-ACT-3 deny-list: another probe's
 action is expressible only as E-RLY citing that probe's own
 E-ACT message.
@@ -275,7 +275,7 @@ of fleet traffic:
 
 1. **Expand** PROBES-W to PROBES-H mechanically (Wire Format
    §8); verify digests; deduplicate by `MG` and by
-   (sender, region, procedure) on E-ACT records.
+   (sender, target, procedure) on E-ACT records.
 2. **Weight by tier.** Tier 1 clauses (E-OBS, E-MSR, E-ACT)
    anchor the report; Tier 2 clauses carry their full pedigree
    (premises, models, datasets, hop counts) for audit; Tier 3

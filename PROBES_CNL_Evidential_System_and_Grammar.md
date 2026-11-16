@@ -106,7 +106,7 @@ Tier 1.
 
 | Form | Example |
 |---|---|
-| `(executed, procedure [proc-ref], journal [jrn-ref])` | "The survey of region `REG-4471` reached completion (executed, procedure `PROC-12`, journal `JRN-1`)." |
+| `(executed, procedure [proc-ref], journal [jrn-ref])` | "The survey of target `TGT-1088` reached completion (executed, procedure `PROC-12`, journal `JRN-1`)." |
 | `(executed, procedure [proc-ref], journal [jrn-ref], steps [a]-[b])` | "Sample collection on target `TGT-1088` covered nine sites (executed, procedure `PROC-31`, journal `JRN-1`, steps 4-12)." |
 
 **Linter rule (E-ACT-1):** the procedure reference must resolve
@@ -126,7 +126,7 @@ did as first-hand fact.
 **Why E-ACT exists.** The base language reports observations of
 the world and stipulates procedures, but cannot state *what the
 author did*. Fleet coordination (Overview §3.2) runs entirely
-on completion facts — "region surveyed," "cache placed,"
+on completion facts — "target surveyed," "cache placed,"
 "sub-probe deployed" — so those facts need a first-hand,
 lintable tag with a journal-backed pedigree.
 
@@ -175,7 +175,7 @@ Added for the fleet:
 | Denied basis | Enforcement |
 |---|---|
 | **Tasking** ("probe X performs Y") | no suasive verbs, no deontic modals, no addressee vocabulary, E-PRO-4, E-ACT-3 |
-| **Second-hand action claims** ("probe X surveyed region R" as bare fact) | expressible only as E-RLY citing X's own E-ACT message |
+| **Second-hand action claims** ("probe X surveyed target T" as bare fact) | expressible only as E-RLY citing X's own E-ACT message |
 | **Origin and provenance claims** | provenance word class absent; ORG rules §5.4 |
 | **Second intent** ("this probe operates toward …") | goal vocabulary absent; only `(stipulated, for `PLAN-0`)` exists (PLAN rules §5.2) |
 | **Self-state disclosure** ("the energy reserve of the probe equals …") | SELF-1 (§5.4a): sender internal state inexpressible; sender appears only as E-ACT actor or in single-epoch geometry |
@@ -213,8 +213,8 @@ schema: probes-cnl-v1.0
 message: MSG-9B2E44C7A1D0F358
 sender: P-7F3A9C21
 plan: PLAN-0
-epoch: "BCN-3: 8214559102334 + BCN-5: 130995824"
-position: "GSF -8.21e18 +2.44e17 +6.10e16 meter"
+epoch: "BCN-3: 15050409362501 + BCN-5: 26327013399951"
+position: "GSF 1.46e20 -2.87e20 -3.9e18 meter"
 region: REG-4471
 catalogues:               # version pinning (FRONT-5)
   CAT-BCN: 14
@@ -241,7 +241,7 @@ journals:
 caches: []                # CCH-* cache nodes (R-20)
 epochs:                   # EP-* declared epochs (R-21)
   - id: EP-1
-    value: "BCN-3: 8214559102712"
+    value: "BCN-3: 15050361341658 + BCN-5: 26326929399222"
 references: []            # ARC-* archive records, for E-RPT
 messages_cited:           # for E-RLY
   - id: MSG-4C11D02A9E44B7F0
@@ -304,11 +304,16 @@ Standard Frame (Overview §4.2): `GSF x y z meter` with SI
 prefixes or scientific notation; no other frame is definable.
 
 **TIME-1:** every epoch uses the Pulsar Time Standard: integer
-cycle counts of at least two beacons from `CAT-BCN`. Every
-duration uses seconds with SI prefixes. Epochs referenced from
-clause interiors (dated events, template T16) are declared in
-the `epochs:` envelope list as `EP-*` entries and referenced by
-identifier, keeping clauses within the 18-token cap.
+cycle counts of at least two beacons from `CAT-BCN`, each
+counted from the catalogue activation epoch `T_act` (Physical
+Architecture §4.5). One zero serves every beacon, so two counts
+name one instant. It is the epoch at which recording begins
+(DSP-2): no message needs a count from before it, and it tells
+nothing of where the fleet set out. Every duration uses seconds
+with SI prefixes. Epochs referenced from clause interiors (dated
+events, template T16) are declared in the `epochs:` envelope
+list as `EP-*` entries and referenced by identifier, keeping
+clauses within the 18-token cap.
 
 ### 5.3a Identifier extensions
 
@@ -349,10 +354,10 @@ Together TRJ-1 … TRJ-3 prevent reconstruction of any probe's
 long-run trajectory from message traffic, which blocks
 back-extrapolation toward a common launch origin.
 
-**ORG-3:** structural catalogues (`CAT-CCH`, `CAT-REG`)
-carry no establishment, founding, or first-visit epochs.
-Activity chronology is what an origin-inference attack fits
-circles to (Physical Architecture §4.5); deduplication and
+**ORG-3:** structural catalogues (`CAT-CCH`, `CAT-REG`,
+`CAT-TGT`) carry no establishment, founding, or first-visit
+epochs. Activity chronology is what an origin-inference attack
+fits circles to (Physical Architecture §4.5); deduplication and
 routing need status, never dates.
 
 ### 5.4a Consolidation and self-state rules
@@ -370,6 +375,20 @@ in the archive and do not satisfy the preconditions of
 catalogue procedures (e.g., resource thresholds for `PROC-RCH`).
 This is the containment backstop for false-but-well-formed
 content from a compromised probe.
+
+**CONS-3:** coverage is kept by system. A coverage aggregate
+holds, for every star system of `CAT-TGT` within its scope,
+whether a completion record for it exists. A region has no
+completion status of its own.
+
+**CONS-4:** an entry of `CAT-TGT` for a star system holds what
+lets a later probe recognize it: position and velocity in the
+Galactic Standard Frame, reduced to the one epoch that the
+catalogue version declares, and quantities that stay the same
+over the survey — the masses, effective temperatures and
+luminosities of its stars. A probe passes a star by as a
+surveyed target only when the match is at least 0.9999
+probable; below that it surveys the system.
 
 **SELF-1:** quantities predicated on the sending
 probe's internal state — energy reserves, consumables,
