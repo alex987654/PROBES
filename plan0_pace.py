@@ -59,9 +59,9 @@ STRATEGIES = {
                    "center to the rim while the disc turns past it; a "
                    "system is surveyed when it crosses the line"),
     "systems": ("as regions, but completion is recorded by system, so a "
-                "system surveyed anywhere is recognized and never visited "
-                "twice; a probe goes to the nearest system not yet "
-                "surveyed"),
+                "system surveyed anywhere is recognized and not surveyed "
+                "again; a probe goes to the nearest system it does not "
+                "know to be surveyed"),
     "systems-midplane": ("as systems, with the probes waiting in a thin "
                          "layer at the mid-plane of the disc, where "
                          "systems are closest together, and taking each "
@@ -236,7 +236,7 @@ _NUMBER_RULES = {
     "dup_cap": (0, True, None, False),
     "dup_gain": (0, True, None, False),
     "neighbors": (0, True, None, False),
-    "confidence": (0, False, 1, False),
+    "confidence": (0, False, 1, True),
 }
 _WHOLE_NUMBER_FIELDS = ("probes", "station_count", "deposit_every",
                         "neighbors")
@@ -317,11 +317,11 @@ class Scenario:
     dup_cap: float = 0.5                 # ceiling on duplicated-work fraction
     dup_gain: float = 1.0                # tuning gain on duplication model
     neighbors: int = 6                   # planar node degree; section 4.3
-    # How sure a probe must be that a system it takes for unsurveyed has
-    # not been surveyed by another probe meanwhile (the plan: 95 times in
-    # 100). It sets how fresh a probe's knowledge has to be, which the
-    # report states; the survey time follows from how fresh the archive
-    # layout actually keeps it.
+    # How sure a probe is of what it takes the others to have done (the
+    # plan: right 95 times in 100). Where the stars mix it sets how fresh
+    # a probe's knowledge has to be, which the report states. Where they
+    # stand still it is the share of the others' choices that a probe
+    # works out correctly from the common rule (see STILL_FIELD).
     confidence: float = 0.95
 
     def __post_init__(self) -> None:
@@ -564,8 +564,8 @@ INPUT_TABLE = [
     ("neighbors", None, None, None, False,
      "Physical Layer section 4.3"),
     ("confidence", None, None, None, False,
-     "the plan: a probe relies on what it knows of the work of the others "
-     "while that is right 95 times in 100"),
+     "the plan: a probe works out what the others do from the common rule "
+     "and relies on that while it is right 95 times in 100"),
 ]
 
 DEFAULT_DRAWS = 2000
@@ -1083,6 +1083,260 @@ def stale_knowledge(delay_s: float, load_per_second, last: float,
                 break
     result["sure_until_share"] = until
     return result
+
+
+# ---------------------------------------------------------------------------
+# A fleet so large that the stars stand still while the survey lasts
+#
+# With a hundred systems per probe the survey phase lasts a few thousand
+# years, in which a star moves a tenth of the way to its neighbor. The
+# pace is then decided locally: by where the probes start, by the rule
+# that sends them on, and by what each knows of its neighbors.
+# plan0_sim.py follows single probes for that case. STILL_FIELD holds what
+# it found for probes that first clear the systems nearest their own
+# starting point and then go wherever they know of systems still to do:
+#
+#   levels     shares of the systems
+#   travel     spacings traveled, per system and probe, until each level
+#   stops      stays made, per system and probe, until each level
+#              (time per system = travel x time per spacing + stops x
+#              stay, fitted to stays of 0.05, 0.2 and 0.4 times per spacing)
+#   hop        the mean hop that ends in a survey, in spacings
+#   per_probe  those times, relative, for other numbers of systems per
+#              probe than a hundred
+#   knowledge  those times, relative, with the share of visits wasted and
+#              the spacings traveled in vain per system, where a probe
+#              foresees only a share of the others' choices and completion
+#              records reach it late (in share times, the time one probe
+#              needs for its share at a hop of 0.78 spacings; None:
+#              never). The first row is the base: no foresight, records
+#              at light speed.
+#   even_starts  for comparison, in share times: the levels reached by
+#              probes that start on a regular lattice, keep to their own
+#              cell and know nothing of the others
+#
+# Starting points drawn at random; light ten times as fast as a probe.
+# Where records never arrive the runs stop at 99.99 percent, since the
+# last systems are then found only by chance.
+# To make the table again:
+#     python plan0_sim.py --set full --out plan0_sim_results
+#     python plan0_sim.py --report --table --out plan0_sim_results
+# ---------------------------------------------------------------------------
+
+STILL_FIELD = {
+ "levels": [0.5, 0.9, 0.99, 0.999, 0.9999, 1.0],
+ "hop": 0.8738,
+ "travel": [0.3812, 0.7762, 0.9595, 1.0382, 1.0859, 1.1491],
+ "stops": [0.5092, 0.9247, 1.0683, 1.12, 1.1481, 1.1339],
+ "per_probe": {
+  10.0: [1.1045, 1.1698, 1.2609, 1.3269, 1.3859, 1.3846],
+  30.0: [1.0418, 1.0702, 1.1033, 1.1253, 1.127, 1.1262],
+  100.0: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+  300.0: [0.9767, 0.96, 0.9279, 0.9086, 0.893, 0.8708],
+ },
+ "knowledge": [
+  {"foresight": 0.0, "late": 0.0,
+   "times": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+   "wasted": 0.0688, "wasted_travel": 0.2476},
+  {"foresight": 0.0, "late": 0.0306,
+   "times": [1.0012, 1.0174, 1.0376, 1.0503, 1.0516, 1.0489],
+   "wasted": 0.1057, "wasted_travel": 0.3084},
+  {"foresight": 0.0, "late": 0.102,
+   "times": [1.003, 1.0452, 1.0936, 1.1235, 1.1353, 1.166],
+   "wasted": 0.1749, "wasted_travel": 0.48},
+  {"foresight": 0.0, "late": 0.3061,
+   "times": [1.0054, 1.0911, 1.2046, 1.2725, 1.3166, 1.375],
+   "wasted": 0.3008, "wasted_travel": 0.7909},
+  {"foresight": 0.0, "late": 1.0204,
+   "times": [1.0064, 1.1473, 1.3962, 1.6019, 1.7412, 1.844],
+   "wasted": 0.5155, "wasted_travel": 1.4523},
+  {"foresight": 0.0, "late": 3.0612,
+   "times": [1.0064, 1.1476, 1.4469, 1.7938, 2.1803, 2.8223],
+   "wasted": 0.721, "wasted_travel": 2.8039},
+  {"foresight": 0.0, "late": 4.0816,
+   "times": [1.0064, 1.1476, 1.4469, 1.7938, 2.1803, 3.2893],
+   "wasted": 0.758, "wasted_travel": 3.4471},
+  {"foresight": 0.0, "late": None,
+   "times": [1.0066, 1.1506, 1.4586, 1.7927, 2.1629, None],
+   "wasted": 0.6285, "wasted_travel": 1.7759},
+  {"foresight": 0.8, "late": 0.0,
+   "times": [0.9992, 0.9888, 0.9755, 0.971, 0.9659, 0.9656],
+   "wasted": 0.0338, "wasted_travel": 0.156},
+  {"foresight": 0.8, "late": 0.0306,
+   "times": [0.9997, 0.9953, 0.9932, 0.9944, 0.9961, 1.0048],
+   "wasted": 0.0534, "wasted_travel": 0.2125},
+  {"foresight": 0.8, "late": 0.102,
+   "times": [1.0002, 1.005, 1.0118, 1.0176, 1.017, 1.0386],
+   "wasted": 0.0807, "wasted_travel": 0.2849},
+  {"foresight": 0.8, "late": 0.3061,
+   "times": [1.0013, 1.0234, 1.0546, 1.0795, 1.0971, 1.1362],
+   "wasted": 0.1442, "wasted_travel": 0.452},
+  {"foresight": 0.8, "late": 1.0204,
+   "times": [1.0017, 1.0507, 1.1393, 1.2174, 1.295, 1.4756],
+   "wasted": 0.3129, "wasted_travel": 0.9386},
+  {"foresight": 0.8, "late": 3.0612,
+   "times": [1.0017, 1.0507, 1.1515, 1.2566, 1.3744, 1.6975],
+   "wasted": 0.42, "wasted_travel": 1.2516},
+  {"foresight": 0.8, "late": 4.0816,
+   "times": [1.0017, 1.0507, 1.1515, 1.2566, 1.3744, 1.6975],
+   "wasted": 0.42, "wasted_travel": 1.2516},
+  {"foresight": 0.8, "late": None,
+   "times": [1.0017, 1.0507, 1.1515, 1.2566, 1.3744, None],
+   "wasted": 0.2989, "wasted_travel": 0.7254},
+  {"foresight": 0.95, "late": 0.0,
+   "times": [0.9989, 0.9848, 0.9677, 0.9731, 0.9882, 0.9948],
+   "wasted": 0.0209, "wasted_travel": 0.1456},
+  {"foresight": 0.95, "late": 0.0306,
+   "times": [0.999, 0.9872, 0.9745, 0.9788, 0.9926, 1.0006],
+   "wasted": 0.0301, "wasted_travel": 0.1689},
+  {"foresight": 0.95, "late": 0.102,
+   "times": [0.9991, 0.9906, 0.9808, 0.9788, 0.9785, 1.0158],
+   "wasted": 0.0443, "wasted_travel": 0.2173},
+  {"foresight": 0.95, "late": 0.3061,
+   "times": [0.9995, 0.9974, 0.9968, 0.996, 0.9927, 1.0109],
+   "wasted": 0.0701, "wasted_travel": 0.268},
+  {"foresight": 0.95, "late": 1.0204,
+   "times": [0.9997, 1.0089, 1.0285, 1.0494, 1.0616, 1.0893],
+   "wasted": 0.1306, "wasted_travel": 0.4019},
+  {"foresight": 0.95, "late": 3.0612,
+   "times": [0.9997, 1.0089, 1.0311, 1.0574, 1.0786, 1.1464],
+   "wasted": 0.1609, "wasted_travel": 0.4845},
+  {"foresight": 0.95, "late": 4.0816,
+   "times": [0.9997, 1.0089, 1.0311, 1.0574, 1.0786, 1.1464],
+   "wasted": 0.1609, "wasted_travel": 0.4845},
+  {"foresight": 0.95, "late": None,
+   "times": [0.9999, 1.0092, 1.0321, 1.049, 1.0764, None],
+   "wasted": 0.119, "wasted_travel": 0.3275},
+  {"foresight": 0.99, "late": 0.0,
+   "times": [0.9989, 0.9838, 0.9677, 0.9936, 1.0243, 1.0697],
+   "wasted": 0.0138, "wasted_travel": 0.16},
+  {"foresight": 0.99, "late": 0.0306,
+   "times": [0.9989, 0.9843, 0.9685, 0.9951, 1.0348, 1.0519],
+   "wasted": 0.0173, "wasted_travel": 0.1612},
+  {"foresight": 0.99, "late": 0.102,
+   "times": [0.9989, 0.985, 0.9696, 0.9795, 1.0064, 1.0276],
+   "wasted": 0.024, "wasted_travel": 0.1779},
+  {"foresight": 0.99, "late": 0.3061,
+   "times": [0.999, 0.9873, 0.9725, 0.9696, 0.972, 0.9803],
+   "wasted": 0.0342, "wasted_travel": 0.1873},
+  {"foresight": 0.99, "late": 1.0204,
+   "times": [0.9991, 0.9909, 0.984, 0.9848, 0.9791, 0.9816],
+   "wasted": 0.055, "wasted_travel": 0.2283},
+  {"foresight": 0.99, "late": 3.0612,
+   "times": [0.9991, 0.9909, 0.9844, 0.9864, 0.9841, 0.9841],
+   "wasted": 0.0587, "wasted_travel": 0.2356},
+  {"foresight": 0.99, "late": 4.0816,
+   "times": [0.9991, 0.9909, 0.9844, 0.9864, 0.9841, 0.9841],
+   "wasted": 0.0587, "wasted_travel": 0.2356},
+  {"foresight": 0.99, "late": None,
+   "times": [0.9991, 0.9909, 0.9844, 0.9864, 0.9841, None],
+   "wasted": 0.0477, "wasted_travel": 0.1785},
+  {"foresight": 1.0, "late": 0.0,
+   "times": [0.9992, 0.9827, 0.9709, 1.1108, 1.2212, 1.3403],
+   "wasted": 0.0, "wasted_travel": 0.0},
+ ],
+ "even_starts": [0.4813, 0.9402, 1.142, 1.2451, 1.3217, 1.4052],
+}
+
+
+def _line(x, x0, x1, y0, y1):
+    """The straight line through two points, read at x."""
+    return y0 if x1 == x0 else y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+
+
+def still_field(per_probe: float, foresight: float, late) -> dict:
+    """Read STILL_FIELD for a fleet with so many systems per probe, whose
+    probes foresee this share of each other's choices and receive
+    completion records `late` share times after the event (None: never).
+
+    Returns, for every level of the table, the spacings traveled and the
+    stays made per system and probe until that share of the systems is
+    done; the share of visits wasted; the spacings traveled in vain per
+    system; and whether the last level stands for 99.99 percent because
+    the very last systems would be found only by chance."""
+    table = STILL_FIELD
+    levels = table["levels"]
+    count = len(levels)
+    # what one probe needs for its share at the base, in share times
+    base = [(table["travel"][i] + 0.2 * table["stops"][i])
+            / (CLEARED_FIELD_HOP + 0.2) for i in range(count)]
+
+    sizes = sorted(table["per_probe"])
+    n = min(max(per_probe, sizes[0]), sizes[-1])
+    size = table["per_probe"][sizes[0]]
+    for low, high in zip(sizes, sizes[1:]):
+        if low <= n <= high:
+            size = [_line(math.log(n), math.log(low), math.log(high), a, b)
+                    for a, b in zip(table["per_probe"][low],
+                                    table["per_probe"][high])]
+            break
+
+    def whole(row):
+        """A row with its last level filled in where records never came."""
+        times = list(row["times"])
+        stand_in = times[-1] is None
+        if stand_in:
+            times[-1] = times[-2] * base[-2] / base[-1]
+        return times, row["wasted"], row["wasted_travel"], stand_in
+
+    def along(share):
+        rows = [row for row in table["knowledge"]
+                if row["foresight"] == share]
+        finite = sorted((row for row in rows if row["late"] is not None),
+                        key=lambda row: row["late"])
+        never = next((row for row in rows if row["late"] is None), None)
+        if late is None:
+            return whole(never if never is not None else finite[-1])
+        if late <= finite[0]["late"]:
+            return whole(finite[0])
+        for r0, r1 in zip(finite, finite[1:]):
+            if late <= r1["late"]:
+                a, b = whole(r0), whole(r1)
+                return ([_line(late, r0["late"], r1["late"], x, y)
+                         for x, y in zip(a[0], b[0])],
+                        _line(late, r0["late"], r1["late"], a[1], b[1]),
+                        _line(late, r0["late"], r1["late"], a[2], b[2]),
+                        False)
+        # later than any delay simulated
+        last = whole(finite[-1])
+        if never is None:
+            return last
+        edge = finite[-1]["late"]
+        times = []
+        for i, without in enumerate(never["times"]):
+            if without is None:
+                # The last system waits for the records, then is done as
+                # soon after them as at the longest delay simulated. If it
+                # was done before they came even there, they do not matter.
+                lag = last[0][i] * base[i] - edge
+                times.append(last[0][i] if lag <= 0.0 else
+                             max(last[0][i], (late + lag) / base[i]))
+                continue
+            # a level reached without records before they arrive is
+            # reached as if they never came
+            reached = without * base[i]
+            times.append(without if late >= reached or reached <= edge
+                         else _line(late, edge, reached, last[0][i], without))
+        return times, never["wasted"], never["wasted_travel"], False
+
+    shares = sorted({row["foresight"] for row in table["knowledge"]})
+    c = min(max(foresight, shares[0]), shares[-1])
+    low = max(share for share in shares if share <= c)
+    high = min(share for share in shares if share >= c)
+    a, b = along(low), along(high)
+    times = [_line(c, low, high, x, y) for x, y in zip(a[0], b[0])]
+    for i in range(1, count):
+        times[i] = max(times[i], times[i - 1] * base[i - 1] / base[i])
+    return dict(
+        levels=levels,
+        travel=[table["travel"][i] * size[i] * times[i]
+                for i in range(count)],
+        stops=[table["stops"][i] * size[i] * times[i] for i in range(count)],
+        wasted=_line(c, low, high, a[1], b[1]),
+        wasted_travel=_line(c, low, high, a[2], b[2]),
+        last_stands_for_9999=(a[3] and c < high) or (b[3] and c > low)
+        or (a[3] and b[3]),
+        outside=not sizes[0] <= per_probe <= sizes[-1])
 
 
 def leg_seconds(distance_m: float, v: float, acceleration) -> float:
@@ -1661,9 +1915,17 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
         open_hop_m = open_scale * gal["mean_spacing_pc"] * PARSEC_M
         open_first_s, open_cruise = mean_hop_seconds(gal, open_scale, v,
                                                      accel)
-        hop_m = (1.0 - mixed) * still_hop_m + mixed * open_hop_m
-        first_hop_s = (1.0 - mixed) * still_first_s + mixed * open_first_s
-        cruise_share = (1.0 - mixed) * still_cruise + mixed * open_cruise
+        # Where the stars stand still a probe clears its own share among
+        # neighbors doing the same; its hops are those of the simulation
+        # (STILL_FIELD), a little longer than on a route through a field
+        # it has to itself.
+        share_scale = hop_scale * STILL_FIELD["hop"] / CLEARED_FIELD_HOP
+        share_hop_m = share_scale * at_large["mean_spacing_pc"] * PARSEC_M
+        share_first_s, share_cruise = mean_hop_seconds(at_large, share_scale,
+                                                       v, accel)
+        hop_m = (1.0 - mixed) * share_hop_m + mixed * open_hop_m
+        first_hop_s = (1.0 - mixed) * share_first_s + mixed * open_first_s
+        cruise_share = (1.0 - mixed) * share_cruise + mixed * open_cruise
         # first hop over mean spacing, for the spread of hop lengths
         hop_scale = hop_m / (gal["mean_spacing_pc"] * PARSEC_M)
     else:
@@ -1678,14 +1940,14 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
     def path_share(share):
         if not by_system:
             return share
-        return ((1.0 - mixed) * still_hop_m * share
+        return ((1.0 - mixed) * share_hop_m * share
                 + mixed * open_hop_m * _over_parts(0, share)) / hop_m
 
     def hop_growth(share):
         """Length of a hop, in first hops, when a share is surveyed."""
         if not by_system:
             return 1.0
-        return ((1.0 - mixed) * still_hop_m
+        return ((1.0 - mixed) * share_hop_m
                 + mixed * open_hop_m * _over_parts(1, share)) / hop_m
 
     thinning = path_share(1.0)      # mean hop of the survey in first hops
@@ -1780,10 +2042,11 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
             # how old it may be when this share of the systems is done
             fresh_enough_years={
                 str(mark): (math.inf if others == 0 else need / load_per_second(
-                    -math.log(1.0 - mark)) / YEAR_S)
+                    -math.log(1.0 - mark)) / YEAR_S)   # 0 if never wrong
                 for mark in KNOWLEDGE_MARKS},
             # reading whenever it has grown that old, until 99 percent
-            readings_until_99_percent=math.log(100.0) / need,
+            readings_until_99_percent=(math.log(100.0) / need if need > 0.0
+                                       else math.inf),
             # the share of the systems up to which the layout keeps it
             # fresh enough (0 without shared archives)
             sure_until_share=(None if not detail else
@@ -1807,8 +2070,128 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
     leg_kpc = (diameter_kpc if sc.dispersal_leg_kpc is None
                else sc.dispersal_leg_kpc)
     dispersal_s = leg_seconds(leg_kpc * KPC_M, v, accel) * sc.envelope_factor
-    duplication_s = work_s * f_dup
-    survey_s = work_s + duplication_s + detour_s
+    still = None
+    uneven_s = 0.0
+    if by_system:
+        # Two surveys, weighted by how far the stars mix. Where they mix:
+        # the laws above, slowed by the visits that stale knowledge
+        # wastes. Where they stand still: the simulated times, which hold
+        # the wasted visits and the wait for the probes with the largest
+        # shares.
+        share_time_s = still_years * YEAR_S
+        still_ramp_s = max(0.0, still_first_s - still_hop_m / v)
+        spacing_s = still_hop_m / CLEARED_FIELD_HOP / v
+        read = still_field(visited_per_probe, sc.confidence,
+                           None if math.isinf(tau_s)
+                           else tau_s / share_time_s)
+        marks = [0.0] + read["levels"]
+        wasted_per_system = read["wasted"] / (1.0 - read["wasted"])
+        # Every hop, wasted or not, costs the time to speed up and slow
+        # down once; the simulation has none, so it is added here.
+        still_at = [0.0] + [
+            visited_per_probe * (
+                travel * spacing_s + stops * (still_ramp_s + dwell_s)
+                + wasted_per_system * level * still_ramp_s)
+            for level, travel, stops in zip(read["levels"], read["travel"],
+                                            read["stops"])]
+        open_cruise_s = open_hop_m / v
+        open_ramp_s = max(0.0, open_first_s - open_cruise_s)
+        mixed_dup = f_dup
+
+        def core(share):
+            """Seconds of survey until this share is done, side trips
+            to the archives aside."""
+            share = min(1.0, max(0.0, share))
+            for i in range(1, len(marks)):
+                if share <= marks[i]:
+                    still_s = _line(share, marks[i - 1], marks[i],
+                                    still_at[i - 1], still_at[i])
+                    break
+            mixed_s = visited_per_probe * (1.0 + mixed_dup) * (
+                open_cruise_s * _over_parts(0, share)
+                + (open_ramp_s + dwell_s) * share)
+            return (1.0 - mixed) * still_s + mixed * mixed_s
+
+        core_raw = core(1.0)
+        # The last system cannot be done before the average probe has
+        # done its share of the work. (The table splits time into travel
+        # and stays at one ratio of the two; where engines are so weak or
+        # stays so long that the split no longer holds, this keeps the
+        # parts in order.)
+        core_all = max(core_raw, work_s)
+        duplication_s = (
+            (1.0 - mixed) * visited_per_probe
+            * (read["wasted_travel"] * spacing_s
+               + wasted_per_system * still_ramp_s)
+            + mixed * visited_per_probe * mixed_dup * (
+                open_cruise_s * _over_parts(0, 1.0) + open_ramp_s + dwell_s))
+        # The wasted travel of the table can exceed what fits before the
+        # end (the two come from runs of different length): then it ends
+        # with the survey.
+        duplication_s = max(0.0, min(duplication_s, core_all - work_s))
+        # what is left: the probes with the largest shares finishing,
+        # and the last systems waiting for records that come late
+        uneven_s = core_all - work_s - duplication_s
+        if abs(uneven_s) < 1e-9 * core_all:
+            uneven_s = 0.0
+        survey_s = core_all + detour_s
+        f_dup = duplication_s / work_s
+        equal_count = None
+        if detail and mixed < 0.5:
+            # The figures give every probe the same amount of work. With
+            # the same number of systems instead, a probe needs its share
+            # times the local time per system, and the thin outer parts
+            # lag. Shares of the systems done, from the spread of spacings:
+            # bins that halve what is left, down to one system in 100,000.
+            edges = [1.0 - 10.0 ** (-j / 10.0) for j in range(51)] + [1.0]
+            bins = []
+            for low, high in zip(edges, edges[1:]):
+                local = (spacing_percentile(at_large, 0.5 * (low + high))
+                         / at_large["mean_spacing_pc"])
+                bins.append((high - low, [0.0] + [
+                    visited_per_probe * (travel * spacing_s * local
+                                         + stops * (still_ramp_s + dwell_s))
+                    for travel, stops in zip(read["travel"], read["stops"])]))
+
+            def done_by(seconds):
+                total = 0.0
+                for weight, times in bins:
+                    if seconds >= times[-1]:
+                        total += weight
+                        continue
+                    for i in range(1, len(marks)):
+                        if seconds <= times[i]:
+                            total += weight * _line(
+                                seconds, times[i - 1], times[i],
+                                marks[i - 1], marks[i])
+                            break
+                return total
+            equal_count = {}
+            for share in (0.5, 0.99, 0.999):
+                low, high = 0.0, 1e6 * still_at[-1]
+                for _ in range(80):
+                    mid = 0.5 * (low + high)
+                    if done_by(mid) < share:
+                        low = mid
+                    else:
+                        high = mid
+                equal_count["%g" % share] = high / YEAR_S
+        still = dict(
+            weight=1.0 - mixed,
+            equal_count_years=equal_count,
+            share_time_years=share_time_s / YEAR_S,
+            foresight=sc.confidence,
+            records_late_share_times=(None if math.isinf(tau_s)
+                                      else tau_s / share_time_s),
+            wasted_visit_share=read["wasted"],
+            last_stands_for_9999=read["last_stands_for_9999"],
+            outside_simulated_range=read["outside"],
+            years_to_levels={
+                "%g" % level: seconds / YEAR_S
+                for level, seconds in zip(read["levels"], still_at[1:])})
+    else:
+        duplication_s = work_s * f_dup
+        survey_s = work_s + duplication_s + detour_s
     # A line held while the disc turns cannot be swept faster than the
     # disc turns: every stretch has to stay staffed for one turn, and the
     # rim takes longest. A fleet large enough to finish its work sooner
@@ -1841,12 +2224,18 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
         with the work; or systems, with hops growing as they thin out."""
         if not by_system:
             return share
-        done = cruise_s * path_share(share) + (ramp_s + dwell_s) * share
-        return done / t_sys_s
+        return core(share) / core_raw
 
+    # A probe that deposits its records once, at the end of its share,
+    # makes that side trip after its last system: no milestone waits for
+    # it. (With several deposits the side trips are spread over the
+    # survey; that the last of them also comes after the last system is
+    # then an error of at most one trip in thousands.)
+    last_trip_s = detour_s if 0.0 < deposits_per_probe <= 1.0 else 0.0
     milestones = []
     for frac in MILESTONE_FRACTIONS:
-        t_frac = _survey_time_for_fraction(sc, dispersal_s, survey_s,
+        t_frac = _survey_time_for_fraction(sc, dispersal_s,
+                                           survey_s - last_trip_s,
                                            work_share(frac))
         milestones.append(dict(
             fraction=frac,
@@ -1875,7 +2264,18 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
                       * gal["mean_spacing_at_large_pc"])
 
     # Distances -------------------------------------------------------------
-    survey_path_m = visited_per_probe * hop_m * thinning * (1.0 + f_dup)
+    stops_per_probe = visited_per_probe * (1.0 + f_dup)
+    if by_system:
+        stops_per_probe = visited_per_probe * (
+            1.0 + (1.0 - mixed) * wasted_per_system + mixed * mixed_dup)
+        # the hops that end in a survey, and those of the wasted visits
+        survey_path_m = visited_per_probe * (
+            hop_m * thinning
+            + (1.0 - mixed) * read["wasted_travel"] * still_hop_m
+            / CLEARED_FIELD_HOP
+            + mixed * mixed_dup * open_hop_m * _over_parts(0, 1.0))
+    else:
+        survey_path_m = visited_per_probe * hop_m * thinning * (1.0 + f_dup)
     dispersal_m = leg_kpc * KPC_M       # an upper bound for any probe
     per_probe_m = dispersal_m + survey_path_m + detour_m_per_probe
     fleet_m = per_probe_m * sc.probes
@@ -1912,6 +2312,9 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
         # how fresh a probe's knowledge of the others' work must be, and
         # is (None unless completion is recorded by system)
         knowledge=knowledge,
+        # the survey as simulated for stars that stand still, and its
+        # weight in this run (None unless completion is recorded by system)
+        still=still,
         propellant=dict(
             exhaust_speed_c=sc.exhaust_speed_c,
             mass_ratio_per_stop=mass_ratio,
@@ -1939,6 +2342,8 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
                 for a in REFERENCE_ACCELERATIONS] if detail else None),
         per_system_years=t_sys_s / YEAR_S,
         visited_per_probe=visited_per_probe,
+        # arrivals at a system, the wasted ones included
+        stops_per_probe=stops_per_probe,
         region_systems=region_systems,
         region_shrunk=region_systems < sc.region_systems,
         regions_per_probe=regions_per_probe,
@@ -1958,13 +2363,15 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
         duplication_fraction=f_dup,
         # True when the formula asked for more than the ceiling although
         # archives exist: the fleet is too large for the approximation.
-        duplication_capped=(not math.isinf(tau_s) and f_dup_raw > sc.dup_cap),
+        duplication_capped=(not math.isinf(tau_s) and f_dup_raw > sc.dup_cap
+                            and (still is None or still["weight"] <= 0.5)),
         phases=dict(
             dispersal_years=dispersal_s / YEAR_S,
             survey_work_years=work_s / YEAR_S,
             duplicated_work_years=duplication_s / YEAR_S,
             archive_detours_years=detour_s / YEAR_S,
             line_wait_years=line_wait_s / YEAR_S,
+            uneven_share_years=uneven_s / YEAR_S,
         ),
         attrition=attrition,
         fleet_exhausted=math.isinf(total_s),
@@ -1996,7 +2403,9 @@ def derive(sc: Scenario, detail: bool = True, _compare: bool = True) -> dict:
             strategy=name,
             seen_after_one_pass=other["reached"]["seen_after_one_pass"],
             years_to_99_percent=other["reached"]["rows"][-1]["years"],
-            one_pass_years=other["total_years"])
+            one_pass_years=other["total_years"],
+            waits_at_mid_plane=bool(other["plane_wait"]
+                                    and other["plane_wait"]["waits"]))
             for name, other in (
                 (name, derive(replace(sc, strategy=name), detail=False,
                               _compare=False)) for name in STRATEGIES)]
@@ -2375,8 +2784,8 @@ def describe_reached(r: dict, canonical: bool = False) -> list:
                      else sig(mixing["crossings"], 2))
         lines = fill(
             "Completion is recorded by system: a probe recognizes a system "
-            "that was surveyed anywhere and passes it by. No visit is "
-            "repeated, and the milestones count systems.")
+            "that was surveyed anywhere and passes it by. No system is "
+            "surveyed twice, and the milestones count systems.")
         open_field = (
             "a probe goes to the nearest system not yet surveyed and never "
             "has to clear a volume, so its hops are %s times the spacing "
@@ -2392,16 +2801,23 @@ def describe_reached(r: dict, canonical: bool = False) -> list:
             lines += fill(
                 "The stars barely move during a survey this short: a "
                 "system gets %s of the way across one probe's share of the "
-                "galaxy. The systems still to do stay where they were, "
-                "each probe clears its own share, and the survey runs as "
-                "it would by regions." % percent(mixing["crossings"]))
+                "galaxy. The systems still to do stay where they were, and "
+                "what happens is local. The figures are those of a "
+                "simulation that follows single probes (plan0_sim.py): each "
+                "probe first clears the systems nearest its own starting "
+                "point, then goes wherever it knows of systems still to do. "
+                "Its hops are %s mean spacings on average. The starting "
+                "points fall at random, so the shares are uneven, and the "
+                "survey ends when the largest are done."
+                % (percent(mixing["crossings"]), sig(STILL_FIELD["hop"], 2)))
         elif mixing["share"] < 0.995:
             lines += fill(
                 "The stars mix only in part during a survey this short: a "
                 "system crosses one probe's share of the galaxy %s times. "
                 "The figures are weighted, %s to %s, between two cases. "
-                "With stars that stand still the survey runs as it would "
-                "by regions. With stars that mix fully %s, and those "
+                "With stars that stand still each probe clears the systems "
+                "nearest its own starting point first, as simulated with "
+                "single probes. With stars that mix fully %s, and those "
                 "systems thin out among the ones already done. Here %s."
                 % (crossings, percent(1.0 - mixing["share"]),
                    percent(mixing["share"]), open_field, grown))
@@ -2453,7 +2869,9 @@ def describe_reached(r: dict, canonical: bool = False) -> list:
         lines += fill(
             "The specification records completion by region. This needs a "
             "record per system, compact enough to tell it apart from every "
-            "other, that every archive station holds.")
+            "other, %s."
+            % ("that every archive station holds" if mixing["share"] >= 0.5
+               else "within reach of the probes around it"))
         return lines
 
     if sc["strategy"] == "sweep-line":
@@ -2535,6 +2953,31 @@ def describe_knowledge(r: dict, canonical: bool = False) -> list:
     sure = percent(know["confidence"])
     if math.isinf(fresh["0.0"]):
         return fill("A single probe has no other probe's work to learn of.")
+    still = r["still"]
+    if still["weight"] > 0.5:
+        # the stars stand still: what the simulation of single probes gives
+        late = still["records_late_share_times"]
+        text = (
+            "The stars stand still while this survey lasts, so a probe "
+            "meets the work of others only around the edge of its own "
+            "share. For the systems nearest its own starting point it "
+            "needs to know nothing of the others. Beyond those it is taken "
+            "to foresee %s of the others' choices from the common rule "
+            "(--confidence), and %s. In the simulation %s of all visits "
+            "are then wasted."
+            % (sure,
+               "no records of their work ever reach it" if late is None else
+               "records of their work reach it %s after the event, %s times "
+               "what one probe needs for its share"
+               % (fmt_duration(r["staleness_years"], canonical),
+                  sig(late, 2)),
+               percent(still["wasted_visit_share"])))
+        if still["outside_simulated_range"]:
+            text += (
+                " This fleet has %s systems per probe; the simulation "
+                "covers 10 to 300, and the nearest of those is used."
+                % human_count(r["visited_per_probe"], 2))
+        return fill(text)
     text = (
         "A system that a probe takes for unsurveyed may have been surveyed "
         "by another probe meanwhile, and going there is a wasted visit. "
@@ -2576,7 +3019,7 @@ def describe_strategies(r: dict, canonical: bool = False) -> list:
     lines = []
     for row in r["strategies"]:
         if row["strategy"] in RECORDS_BY_SYSTEM:
-            note = "every visit is to a new system"
+            note = "no system is surveyed twice"
         else:
             note = "one %s reaches %s" % (
                 "sweep" if row["strategy"] == "sweep-line" else "pass",
@@ -2588,10 +3031,16 @@ def describe_strategies(r: dict, canonical: bool = False) -> list:
             "not reached" if row["years_to_99_percent"] is None
             else fmt_duration(row["years_to_99_percent"], canonical),
             note))
-    lines += fill(
-        "The two that record by system finish together. Waiting at the "
-        "mid-plane brings the first half of the systems sooner, not the "
-        "last.")
+    if any(row["waits_at_mid_plane"] for row in r["strategies"]):
+        lines += fill(
+            "The two that record by system finish together. Waiting at the "
+            "mid-plane brings the first half of the systems sooner, not the "
+            "last.")
+    else:
+        lines += fill(
+            "The two that record by system are the same here: waiting at "
+            "the mid-plane needs a survey of hundreds of millions of "
+            "years, and without it the probes go to the systems.")
     return lines
 
 
@@ -2599,23 +3048,56 @@ def describe_left_out(r: dict, canonical: bool = False) -> list:
     """The caveats, each with its size for this scenario."""
     out = r["left_out"]
     gal = r["galaxy"]
-    balance = (
-        "Balance. The milestones assume every probe ends with an equal "
-        "share, as if work were handed over at no cost. If each probe "
-        "kept to the systems nearest its seed, with seeds scattered at "
-        "random through a uniform disc, %s would be done at the nominal "
-        "time and reaching 99%% would take %s times as long (simulated)."
-        % (percent(UNBALANCED_DONE_AT_NOMINAL_TIME),
-           sig(UNBALANCED_TIME_FOR_99_PERCENT, 2)))
+    still = r.get("still")
+    if still and still["equal_count_years"]:
+        equal = still["equal_count_years"]
+        levels = still["years_to_levels"]
+        balance = (
+            "Balance. Every probe is given the same amount of work, so a "
+            "probe has fewer systems where they lie far apart. The uneven "
+            "shares that starting points drawn at random give on top of "
+            "that are in the figures. If every probe were given the same "
+            "number of systems instead, the outer parts of the galaxy, "
+            "where systems lie far apart, would lag: 99%% of the systems "
+            "would be done %s into the survey and 99.9%% after %s, against "
+            "%s and %s. The starting points are taken as drawn at random, "
+            "which is what a rule keyed on a random identifier gives. "
+            "Spread evenly, one probe to a region of its own, a probe "
+            "would need to know nothing of the others, and 99%% of the "
+            "systems would be done %s into the survey (simulated)."
+            % (fmt_duration(equal["0.99"], canonical),
+               fmt_duration(equal["0.999"], canonical),
+               fmt_duration(levels["0.99"], canonical),
+               fmt_duration(levels["0.999"], canonical),
+               fmt_duration(STILL_FIELD["even_starts"][2]
+                            * still["share_time_years"], canonical)))
+    else:
+        balance = (
+            "Balance. The milestones assume every probe ends with an equal "
+            "share, as if work were handed over at no cost. If each probe "
+            "kept to the systems nearest its seed, with seeds scattered at "
+            "random through a uniform disc, %s would be done at the "
+            "nominal time and reaching 99%% would take %s times as long "
+            "(simulated)."
+            % (percent(UNBALANCED_DONE_AT_NOMINAL_TIME),
+               sig(UNBALANCED_TIME_FOR_99_PERCENT, 2)))
     if gal["model"] == "exponential":
         balance += (
             " In this galaxy model the center holds %s times as many "
             "systems per unit of disc area as the average, so seeds spread "
             "evenly over the area would leave the central probes with that "
             "many times the mean load." % sig(out["central_load_factor"], 2))
-    balance += (" Moving work between probes is what the archives are for, "
-                "and it is not modeled.")
-    if r["knowledge"] is not None:
+    if not (still and still["equal_count_years"]):
+        balance += (" Moving work between probes is what the archives are "
+                    "for, and it is not modeled.")
+    if r["knowledge"] is not None and r["still"]["weight"] > 0.5:
+        duplication = (
+            "Duplication. The wasted visits are those of a simulation of "
+            "single probes among stars that stand still (plan0_sim.py), "
+            "for probes that first clear the systems nearest their own "
+            "starting point. A wasted visit is counted without a stay: the "
+            "probe finds on arrival that the system is done.")
+    elif r["knowledge"] is not None:
         duplication = (
             "Duplication. The duplicated work follows from the age of a "
             "probe's knowledge (see --explain), as if the systems that "
@@ -2685,8 +3167,7 @@ def describe_losses(r: dict, canonical: bool = False) -> list:
     path = (si_quantity(d["per_probe_m"], "meter") if canonical
             else "%s light-years" % human_count(d["per_probe_m"]
                                                 / LIGHT_YEAR_M))
-    stops = human_count(r["visited_per_probe"]
-                        * (1.0 + r["duplication_fraction"]))
+    stops = human_count(r["stops_per_probe"])
     if not a["active"]:
         text = ("No probe is assumed to be lost, over %s and %s stops per "
                 "probe." % (path, stops))
@@ -2868,9 +3349,11 @@ def render_report(r: dict, canonical: bool = False) -> str:
                        ("duplicated work (stale knowledge)",
                         "duplicated_work_years"),
                        ("archive deposit detours", "archive_detours_years"),
-                       ("waiting for the disc to turn", "line_wait_years")]:
+                       ("waiting for the disc to turn", "line_wait_years"),
+                       ("waiting for the last systems",
+                        "uneven_share_years")]:
         y = ph[key]
-        if key == "line_wait_years" and y == 0:
+        if key in ("line_wait_years", "uneven_share_years") and y == 0:
             continue
         share = ("%5.1f%%" % (100 * y / total)
                  if total and not math.isinf(total) else "     ")
@@ -2891,9 +3374,24 @@ def render_report(r: dict, canonical: bool = False) -> str:
         % {"regions": "regions surveyed", "line": "the line swept",
            "systems": "systems surveyed"}[r["milestones_count"]])
     add("-" * 60)
+    # Where the scattering phase is most of the total the milestones all
+    # look alike, so the time since the survey started is given as well.
+    late_start = (total and not math.isinf(total)
+                  and ph["dispersal_years"] > 0.5 * total)
     for m in r["milestones"]:
-        add("  %4.0f%%   %s" % (100 * m["fraction"],
-                                fmt_years(m["years"], canonical, digits=2)))
+        line = "  %4.0f%%   %s" % (100 * m["fraction"],
+                                   fmt_years(m["years"], canonical, digits=2))
+        if late_start and m["years"] is not None:
+            line += ", %s into the survey" % fmt_duration(
+                m["years"] - ph["dispersal_years"], canonical, 2)
+        add(line)
+    still = r.get("still")
+    if still and still["weight"] > 0.5 and still["last_stands_for_9999"]:
+        for line in fill(
+                "Without records of the others' work the very last systems "
+                "are found only by chance. The 100% mark is the one for "
+                "99.99%."):
+            add(line)
     add("")
     add("Systems reached (%s)"
         % {"regions": "regions are fixed volumes; stars drift through",
@@ -2989,8 +3487,11 @@ def render_report(r: dict, canonical: bool = False) -> str:
     if know is not None:
         for line in describe_knowledge(r, canonical):
             add(line)
-    add("  duplicated-work fraction: %.3g (cap %.2g)"
-        % (r["duplication_fraction"], sc["dup_cap"]))
+    if r["still"] is not None and r["still"]["weight"] > 0.5:
+        add("  duplicated-work fraction: %.3g" % r["duplication_fraction"])
+    else:
+        add("  duplicated-work fraction: %.3g (cap %.2g)"
+            % (r["duplication_fraction"], sc["dup_cap"]))
     if r["duplication_capped"] and know is not None:
         add("  the estimate sits at its ceiling: knowledge this old is")
         add("  outside the range the formula was checked for, so the true")
@@ -3051,6 +3552,13 @@ def render_report(r: dict, canonical: bool = False) -> str:
                   else "%d to %d relay hops are" % (hops_low, hops_high))))
     add("  fixes the limit at %d (Physical Layer section 4.3)."
         % g["spec_hop_limit"])
+    if r["still"] is not None and r["still"]["weight"] > 0.5:
+        for line in fill(
+                "That reckoning is for a fleet whose survey outlasts many "
+                "such cycles. This one is over within about one, and a "
+                "probe works within one spacing of its starting point, so "
+                "only the facts of its neighbors can matter to it."):
+            add(line)
     add("  Cold vaults (the third archive tier) change how soon results can")
     add("  be assembled, never the survey pace.")
     add("")
@@ -3313,6 +3821,30 @@ def render_explain(r: dict) -> str:
             % ((1 - know["confidence"]) / know["confidence"] ** 2,
                know["readings_until_99_percent"]),
         ]
+    still = r["still"]
+    if still is not None:
+        late = still["records_late_share_times"]
+        lines += [
+            "where the stars stand still (weight %.4g in this run): the "
+            "times of the" % still["weight"],
+            "  simulation of single probes, read from the table in this "
+            "file",
+            "  share time = systems per probe x (0.78 x time per spacing + "
+            "stay) = %.4g years" % still["share_time_years"],
+            "  foresight %.3g; records late by %s share times; %.4g systems "
+            "per probe" % (still["foresight"],
+                           "(never)" if late is None else "%.4g" % late,
+                           r["visited_per_probe"]),
+            "  time until a share is done = systems per probe x (travel x "
+            "time per spacing",
+            "  + stops x stay), with travel and stops from the table:",
+        ] + ["    %7s%%: %.4g years" % ("%g" % (100 * float(level)), years)
+             for level, years in still["years_to_levels"].items()] + [
+            "  survey = (1 - weight) x the time by the laws for stars that "
+            "mix + weight x this",
+            "the last systems = survey - work - duplicated work = %.4g "
+            "years" % ph["uneven_share_years"],
+        ]
     lines += [
         "duplicated work = %.4g years" % ph["duplicated_work_years"],
         "",
@@ -3331,7 +3863,10 @@ def render_explain(r: dict) -> str:
         % (r["attrition"]["threshold_per_year"],
            r["attrition"]["mean_life_needed_years"]),
         "",
-        "TOTAL = scattering + work x (1 + duplication) + detours%s"
+        ("TOTAL = scattering + work + duplicated work + the last systems "
+         "+ detours%s"
+         if still is not None else
+         "TOTAL = scattering + work x (1 + duplication) + detours%s")
         % (" + wait for one turn of the rim"
            if ph["line_wait_years"] > 0 else ""),
         "      = %.4g years" % r["total_years"],
@@ -3400,9 +3935,12 @@ The report also says how sure the answer is, what every stop costs in
 propellant, how many probes the survey can afford to lose, and which
 effects the estimate leaves out, each with its size.
 
-By default the fleet records which systems are done one by one and
-waits for them at the mid-plane of the disc. The documents record
-completion by region; --strategy regions gives the estimate for that.
+By default the fleet records which systems are done one by one. The
+documents record completion by region; --strategy regions gives the
+estimate for that. With the default fleet every probe has only a hundred
+systems, and the stars hardly move while it surveys them; the figures
+for the survey phase then come from a simulation that follows single
+probes, plan0_sim.py in this folder.
 """
 
 _EPILOG = """\
@@ -3608,12 +4146,14 @@ def build_parser() -> argparse.ArgumentParser:
                    dest="deposit_every",
                    help="deposit records only after every Nth region")
     g.add_argument("--confidence", type=float, metavar="FRACTION",
-                   help="how sure a probe must be that a system it takes "
-                        "for unsurveyed has not been surveyed by another "
-                        "probe meanwhile (default 0.95); the report says "
-                        "how fresh its knowledge of the others' work must "
-                        "be for that, where completion is recorded by "
-                        "system")
+                   help="how sure a probe is of what it takes the other "
+                        "probes to have done (default 0.95). Where the "
+                        "stars stand still while the survey lasts, as "
+                        "for the default fleet, it is the share of the "
+                        "others' choices that a probe works out "
+                        "correctly from the common rule. Where they mix, "
+                        "the report says how fresh a probe's knowledge "
+                        "must be for it to be that sure")
     g.add_argument("--bitrate", type=float, metavar="NUMBER",
                    dest="bitrate_bps",
                    help="optical link speed in bits per second at the "

@@ -164,7 +164,7 @@ class TestModel(unittest.TestCase):
         # Audit A7: with a billion probes each share is 200 systems, but
         # the region cycle stayed at 1000 systems, five times the whole
         # survey of that probe.
-        sc = ten_thousand(probes=1_000_000_000)
+        sc = by_region(probes=1_000_000_000)
         r = pp.derive(sc)
         self.assertTrue(r["region_shrunk"])
         self.assertAlmostEqual(r["region_systems"], r["visited_per_probe"])
@@ -176,11 +176,16 @@ class TestModel(unittest.TestCase):
         # before a share drops below one region.
         self.assertTrue(r["duplication_capped"])
         self.assertTrue(
-            pp.derive(ten_thousand(probes=50_000_000))["duplication_capped"])
+            pp.derive(by_region(probes=50_000_000))["duplication_capped"])
         self.assertFalse(
-            pp.derive(ten_thousand(probes=50_000_000))["region_shrunk"])
+            pp.derive(by_region(probes=50_000_000))["region_shrunk"])
         self.assertFalse(
             pp.derive(ten_thousand(archives="none"))["duplication_capped"])
+        # By system the same fleet takes its wasted visits from the
+        # simulation of single probes, which has no ceiling.
+        plan = pp.derive(pp.Scenario())
+        self.assertTrue(plan["region_shrunk"])
+        self.assertFalse(plan["duplication_capped"])
         # An ordinary fleet is untouched.
         r = pp.derive(ten_thousand())
         self.assertFalse(r["region_shrunk"])
@@ -1195,7 +1200,8 @@ class TestStopAndGo(unittest.TestCase):
         strong = pp.derive(ten_thousand(acceleration_m_s2=1e9))
         self.assertAlmostEqual(strong["total_years"] / instant["total_years"],
                                1.0, places=9)
-        self.assertEqual(instant["kinematics"]["extra_hop_fraction"], 0.0)
+        self.assertAlmostEqual(instant["kinematics"]["extra_hop_fraction"],
+                               0.0, places=12)
         self.assertEqual(instant["kinematics"]["ramp_years"], 0.0)
 
     def test_numerical_average_matches_the_closed_form(self):
@@ -2023,44 +2029,59 @@ class TestStrategies(unittest.TestCase):
             self.assertIsNone(r["mixing"])
             self.assertIsNone(r["plane_wait"])
 
-    def test_stars_that_stand_still_leave_nothing_to_gain(self):
+    def test_stars_that_stand_still(self):
         # A fleet so large that the survey is over before the stars have
-        # moved: recording by system then changes nothing.
+        # moved. Nothing drifts out of a region, so one pass by regions
+        # reaches every system; by system the figures are those of the
+        # simulation of single probes (class TestStillField).
         huge = dict(probes=10_000_000_000)
         by_region = pp.derive(ten_thousand(strategy="regions", **huge))
+        self.assertGreater(by_region["reached"]["seen_after_one_pass"],
+                           0.99)
         for name in pp.RECORDS_BY_SYSTEM:
             r = pp.derive(ten_thousand(strategy=name, **huge))
             self.assertLess(r["mixing"]["share"], 0.01)
-            self.assertAlmostEqual(r["total_years"] / by_region["total_years"],
-                                   1.0, delta=0.001)
+            self.assertGreater(r["still"]["weight"], 0.99)
             self.assertAlmostEqual(r["hop_parsec"] / by_region["hop_parsec"],
-                                   1.0, delta=0.01)
+                                   pp.STILL_FIELD["hop"] / 0.78, delta=0.01)
             self.assertAlmostEqual(r["hop_thinning"], 1.0, delta=0.01)
             text = " ".join(x.strip() for x in pp.render_report(r).splitlines())
             self.assertIn("The stars barely move during a survey this short",
                           text)
+            self.assertIn("a simulation that follows single probes", text)
             self.assertNotIn("thin out", text)
 
     def test_partial_mixing_lies_between_the_two_laws(self):
-        still = pp.derive(ten_thousand(strategy="regions"))
         mixed = pp.derive(ten_thousand(strategy="systems"))
+        share_hop = (pp.derive(ten_thousand(strategy="regions"))["hop_parsec"]
+                     * pp.STILL_FIELD["hop"] / 0.78)
         previous = None
         for probes in (10_000, 300_000, 3_000_000, 30_000_000, 10 ** 9):
             r = pp.derive(ten_thousand(strategy="systems", probes=probes))
             share = r["mixing"]["share"]
             self.assertAlmostEqual(share,
                                    1 - math.exp(-r["mixing"]["crossings"]))
+            self.assertAlmostEqual(r["still"]["weight"], 1 - share)
             if previous is not None:
                 self.assertLess(share, previous)    # shorter survey, less
             previous = share
             self.assertAlmostEqual(
                 r["hop_parsec"],
-                (1 - share) * still["hop_parsec"]
-                + share * mixed["hop_parsec"])
+                (1 - share) * share_hop + share * mixed["hop_parsec"])
             self.assertAlmostEqual(
                 r["hop_parsec"] * r["hop_thinning"],
-                (1 - share) * still["hop_parsec"]
-                + share * 1.5 * mixed["hop_parsec"])
+                (1 - share) * share_hop + share * 1.5 * mixed["hop_parsec"])
+            # the survey is the weighted mean of the two, side trips aside
+            ph = r["phases"]
+            survey = (r["total_years"] - ph["dispersal_years"]
+                      - ph["archive_detours_years"])
+            self.assertAlmostEqual(
+                sum(ph.values()) / r["total_years"], 1.0, places=9)
+            still_years = r["still"]["years_to_levels"]["1"]
+            if share < 1e-9 or share > 1 - 1e-9:
+                continue
+            mixed_years = (survey - (1 - share) * still_years) / share
+            self.assertGreater(mixed_years, 0.0)
         r = pp.derive(ten_thousand(strategy="systems", probes=3_000_000))
         self.assertGreater(r["mixing"]["share"], 0.05)
         self.assertLess(r["mixing"]["share"], 0.995)
@@ -2571,10 +2592,11 @@ class TestKnowledge(unittest.TestCase):
             / know["fresh_enough_years"]["0.5"],
             (0.01 / 0.99 ** 2) / need)
         self.assertLess(surer["sure_until_share"], know["sure_until_share"])
-        # It changes what the report asks for, never the survey time.
-        self.assertEqual(
-            pp.derive(ten_thousand(confidence=0.99))["total_years"],
-            r["total_years"])
+        # Where the stars mix it changes what the report asks for, not
+        # the survey time.
+        self.assertAlmostEqual(
+            pp.derive(ten_thousand(confidence=0.99))["total_years"]
+            / r["total_years"], 1.0, places=9)
 
     def test_layouts_that_keep_knowledge_less_fresh(self):
         shares, totals = [], []
@@ -2588,7 +2610,7 @@ class TestKnowledge(unittest.TestCase):
         self.assertAlmostEqual(shares[2], 0.87, delta=0.01)
         none = pp.derive(ten_thousand(archives="none"))
         self.assertEqual(none["knowledge"]["sure_until_share"], 0.0)
-        self.assertEqual(none["duplication_fraction"], 0.5)
+        self.assertAlmostEqual(none["duplication_fraction"], 0.5, places=9)
         # Knowledge 15 million years old is too old from the first hop.
         old = pp.derive(ten_thousand(region_systems=1e5, deposit_every=2))
         self.assertGreater(old["staleness_years"],
@@ -2650,9 +2672,13 @@ class TestKnowledge(unittest.TestCase):
         self.assertEqual(pp.share_done(0.999), "99.9%")
         self.assertEqual(pp.share_done(0.99), "99.0%")
         self.assertEqual(pp.share_done(0.87), "87%")
-        for bad in (0.0, 1.0, -0.1, 1.5):
+        for bad in (0.0, -0.1, 1.5):
             with self.assertRaises(ValueError):
                 pp.derive(ten_thousand(confidence=bad))
+        # never wrong: allowed, and no knowledge is ever fresh enough
+        never_wrong = pp.derive(ten_thousand(confidence=1.0))
+        self.assertEqual(never_wrong["knowledge"]["sure_until_share"], 0.0)
+        json.dumps(pp.json_safe(never_wrong), allow_nan=False)
         # Each of the two inputs is reported where it cannot matter.
         self.assertEqual(
             [item["input"] for item in pp.derive(by_region(
@@ -2666,6 +2692,263 @@ class TestKnowledge(unittest.TestCase):
             confidence=0.9))["unused_inputs"], [])
         args = pp.build_parser().parse_args(["--confidence", "0.9"])
         self.assertEqual(pp.scenario_from_args(args).confidence, 0.9)
+
+
+class TestStillField(unittest.TestCase):
+    """A fleet so large that the stars stand still while the survey
+    lasts: the figures of the simulation of single probes (plan0_sim.py),
+    read from the table STILL_FIELD."""
+
+    def per_system(self, read, stay=0.2):
+        return [travel + stay * stops
+                for travel, stops in zip(read["travel"], read["stops"])]
+
+    def test_the_table_is_well_formed(self):
+        table = pp.STILL_FIELD
+        count = len(table["levels"])
+        self.assertEqual(table["levels"], sorted(table["levels"]))
+        self.assertEqual(table["levels"][-1], 1.0)
+        for name in ("travel", "stops"):
+            self.assertEqual(len(table[name]), count)
+        self.assertEqual(table["travel"], sorted(table["travel"]))
+        # (the stays are a fitted slope and wobble in the third digit at
+        # the last two levels; the time itself does not go back)
+        self.assertEqual(self.per_system(table),
+                         sorted(self.per_system(table)))
+        # Half of the systems come sooner than half a share: first hops
+        # are short. The last one waits for the largest shares.
+        base = self.per_system(table)
+        self.assertLess(base[0], 0.5 * (0.78 + 0.2))
+        self.assertGreater(base[-1], 1.2 * (0.78 + 0.2))
+        self.assertEqual(table["per_probe"][100.0], [1.0] * count)
+        self.assertEqual(sorted(table["per_probe"]), [10.0, 30.0, 100.0,
+                                                      300.0])
+        first = table["knowledge"][0]
+        self.assertEqual((first["foresight"], first["late"]), (0.0, 0.0))
+        self.assertEqual(first["times"], [1.0] * count)
+        for row in table["knowledge"]:
+            self.assertEqual(len(row["times"]), count)
+            self.assertTrue(0.0 <= row["wasted"] < 1.0)
+            if row["late"] is None and row["foresight"] < 1.0:
+                # runs without records stop at 99.99 percent
+                self.assertIsNone(row["times"][-1])
+            else:
+                self.assertIsNotNone(row["times"][-1])
+        shares = sorted({row["foresight"] for row in table["knowledge"]})
+        self.assertEqual(shares, [0.0, 0.8, 0.95, 0.99, 1.0])
+        # full foresight wastes nothing
+        full = [row for row in table["knowledge"] if row["foresight"] == 1.0]
+        self.assertEqual(len(full), 1)
+        self.assertEqual(full[0]["wasted"], 0.0)
+
+    def test_reading_gives_back_every_simulated_case(self):
+        table = pp.STILL_FIELD
+        base = self.per_system(table)
+        for row in table["knowledge"]:
+            read = pp.still_field(100.0, row["foresight"], row["late"])
+            got = self.per_system(read)
+            for i, ratio in enumerate(row["times"]):
+                if ratio is not None:
+                    self.assertAlmostEqual(got[i], base[i] * ratio, places=9,
+                                           msg=(row["foresight"],
+                                                row["late"], i))
+            self.assertAlmostEqual(read["wasted"], row["wasted"])
+            self.assertEqual(read["last_stands_for_9999"],
+                             row["times"][-1] is None)
+            self.assertFalse(read["outside"])
+        for each, ratios in table["per_probe"].items():
+            got = self.per_system(pp.still_field(each, 0.0, 0.0))
+            for i, ratio in enumerate(ratios):
+                self.assertAlmostEqual(got[i], base[i] * ratio, places=9)
+
+    def test_less_knowledge_is_never_faster_at_the_end(self):
+        # The 99 percent mark comes later the less a probe foresees and
+        # the later the records are, and more visits are wasted.
+        for late in (0.0, 0.1, 1.0, 4.0, None):
+            marks = [self.per_system(pp.still_field(100.0, c, late))[2]
+                     for c in (1.0, 0.99, 0.95, 0.8, 0.0)]
+            if late is not None and late <= 0.1:
+                continue        # with prompt records foresight adds little
+            self.assertEqual(marks, sorted(marks), late)
+        for c in (0.0, 0.8, 0.95):
+            marks = [self.per_system(pp.still_field(100.0, c, late))[2]
+                     for late in (0.0, 0.03, 0.3, 1.0, 3.0, 6.0, None)]
+            self.assertEqual(marks, sorted(marks), c)
+            wasted = [pp.still_field(100.0, c, late)["wasted"]
+                      for late in (0.0, 0.03, 0.3, 1.0)]
+            self.assertEqual(wasted, sorted(wasted), c)
+
+    def test_the_last_system_waits_for_records_that_come_late(self):
+        # Later than any delay simulated: every level that is reached
+        # without records is reached as if they never came, and the last
+        # system is done as soon after the records as at the longest
+        # delay simulated.
+        table = pp.STILL_FIELD
+        share = 0.78 + 0.2
+        for c in (0.0, 0.95):
+            longest = max(row["late"] for row in table["knowledge"]
+                          if row["foresight"] == c and row["late"] is not None)
+            at_longest = self.per_system(pp.still_field(100.0, c, longest))
+            lag = at_longest[-1] / share - longest
+            self.assertLess(lag, 1.0)
+            never = self.per_system(pp.still_field(100.0, c, None))
+            for late in (longest + 1.0, 10.0, 50.0):
+                read = pp.still_field(100.0, c, late)
+                got = self.per_system(read)
+                # (a survey that was over before the records came at the
+                # longest delay simulated does not wait for later ones)
+                self.assertAlmostEqual(
+                    got[-1] / share,
+                    late + lag if lag > 0 else at_longest[-1] / share,
+                    places=9)
+                self.assertFalse(read["last_stands_for_9999"])
+                for i in range(len(got) - 1):
+                    self.assertAlmostEqual(got[i], never[i], places=9)
+
+    def test_between_and_beyond_the_simulated_cases(self):
+        low = self.per_system(pp.still_field(100.0, 0.8, 0.3))
+        high = self.per_system(pp.still_field(100.0, 0.95, 0.3))
+        mid = self.per_system(pp.still_field(100.0, 0.875, 0.3))
+        for a, b, c in zip(low, high, mid):
+            self.assertAlmostEqual(c, 0.5 * (a + b), places=9)
+        self.assertEqual(pp.still_field(100.0, 1.5, 0.0)["travel"],
+                         pp.still_field(100.0, 1.0, 0.0)["travel"])
+        # systems per probe: between by the logarithm, held at the ends
+        thirty = self.per_system(pp.still_field(30.0, 0.0, 0.0))
+        hundred = self.per_system(pp.still_field(100.0, 0.0, 0.0))
+        between = self.per_system(pp.still_field(
+            math.sqrt(3000.0), 0.0, 0.0))
+        for a, b, c in zip(thirty, hundred, between):
+            self.assertAlmostEqual(c, 0.5 * (a + b), places=9)
+        few = pp.still_field(3.0, 0.0, 0.0)
+        self.assertTrue(few["outside"])
+        self.assertEqual(few["travel"],
+                         pp.still_field(10.0, 0.0, 0.0)["travel"])
+        many = pp.still_field(5000.0, 0.0, 0.0)
+        self.assertTrue(many["outside"])
+        self.assertEqual(many["travel"],
+                         pp.still_field(300.0, 0.0, 0.0)["travel"])
+
+    def test_the_plan(self):
+        r = pp.derive(pp.Scenario())
+        still, ph = r["still"], r["phases"]
+        self.assertGreater(still["weight"], 0.98)
+        self.assertEqual(still["foresight"], 0.95)
+        self.assertFalse(still["outside_simulated_range"])
+        # One probe needs about 6,100 years for a hundred systems at a
+        # hop of 0.78 spacings, the yardstick of the table.
+        self.assertAlmostEqual(still["share_time_years"] / 6139, 1.0,
+                               delta=0.001)
+        self.assertAlmostEqual(
+            still["share_time_years"],
+            100 * (pp.derive(pp.Scenario(strategy="regions"))["hop_years"]
+                   + 10.0), places=6)
+        # Records are later than the survey is long.
+        self.assertGreater(still["records_late_share_times"], 3.0)
+        self.assertAlmostEqual(
+            still["records_late_share_times"],
+            r["staleness_years"] / still["share_time_years"])
+        # The phases add up, and the wait for the largest shares is the
+        # part that neither work nor wasted visits explain.
+        self.assertAlmostEqual(sum(ph.values()) / r["total_years"], 1.0,
+                               places=12)
+        self.assertGreater(ph["uneven_share_years"], 0.0)
+        self.assertAlmostEqual(ph["survey_work_years"],
+                               100 * r["per_system_years"])
+        self.assertAlmostEqual(r["duplication_fraction"],
+                               ph["duplicated_work_years"]
+                               / ph["survey_work_years"])
+        # The milestones are the simulated times, but for the 1.3 percent
+        # of weight that the laws for mixing stars keep in this fleet.
+        for m in r["milestones"]:
+            into = m["years"] - ph["dispersal_years"]
+            simulated = still["years_to_levels"]["%g" % m["fraction"]]
+            self.assertAlmostEqual(into / simulated, 1.0, delta=0.15,
+                                   msg=m["fraction"])
+        years = [m["years"] for m in r["milestones"]]
+        self.assertEqual(years, sorted(years))
+        # One visit in six is wasted, so a probe makes about 120 stops
+        # for its hundred systems.
+        wasted = still["wasted_visit_share"]
+        self.assertAlmostEqual(wasted, 0.16, delta=0.01)
+        self.assertAlmostEqual(
+            r["stops_per_probe"],
+            100 * (1 + still["weight"] * wasted / (1 - wasted)
+                   + (1 - still["weight"]) * 0.5), places=6)
+        # The simulated figures, in years after the survey starts: half of
+        # the systems after 3,000, 99 percent after 7,700, the last after
+        # 10,000. The one deposit of its records, at the end of a probe's
+        # share, delays none of them.
+        into = {m["fraction"]: m["years"] - ph["dispersal_years"]
+                for m in r["milestones"]}
+        self.assertAlmostEqual(into[0.5] / 3030, 1.0, delta=0.01)
+        self.assertAlmostEqual(into[0.99] / 7660, 1.0, delta=0.01)
+        self.assertAlmostEqual(into[1.0] / 9990, 1.0, delta=0.01)
+        self.assertAlmostEqual(
+            r["total_years"] - ph["dispersal_years"] - into[1.0],
+            ph["archive_detours_years"], places=6)
+        self.assertAlmostEqual(r["total_years"] / 989_100, 1.0, delta=0.001)
+
+    def test_what_a_probe_knows_changes_the_survey_not_the_total_much(self):
+        base = pp.derive(pp.Scenario())
+        sure = pp.derive(pp.Scenario(confidence=1.0))
+        blind = pp.derive(pp.Scenario(confidence=0.5))
+        prompt = pp.derive(pp.Scenario(consolidation_years=100.0,
+                                       region_systems=3.0, detour_kpc=0.0))
+        none = pp.derive(pp.Scenario(archives="none"))
+
+        def survey(r):
+            return r["total_years"] - r["phases"]["dispersal_years"]
+        self.assertLess(sure["still"]["wasted_visit_share"],
+                        base["still"]["wasted_visit_share"])
+        self.assertLess(base["still"]["wasted_visit_share"],
+                        blind["still"]["wasted_visit_share"])
+        self.assertLess(prompt["still"]["records_late_share_times"], 0.2)
+        self.assertLess(survey(prompt), survey(base))
+        self.assertIsNone(none["still"]["records_late_share_times"])
+        self.assertTrue(none["still"]["last_stands_for_9999"])
+        text = " ".join(pp.render_report(none).split())
+        self.assertIn("The 100% mark is the one for 99.99%", text)
+        self.assertIn("no records of their work ever reach it", text)
+        # Whatever a probe knows, the mission stays within three percent:
+        # the scattering phase is nearly all of it.
+        for r in (sure, blind, prompt, none):
+            self.assertAlmostEqual(r["total_years"] / base["total_years"],
+                                   1.0, delta=0.03)
+
+    def test_the_ten_thousand_fleet_is_not_touched(self):
+        r = pp.derive(ten_thousand())
+        self.assertLess(r["still"]["weight"], 1e-12)
+        self.assertEqual(r["phases"]["uneven_share_years"], 0.0)
+        self.assertNotIn("waiting for the last systems",
+                         pp.render_report(r))
+        self.assertNotIn("into the survey", pp.render_report(r))
+        self.assertIsNone(pp.derive(by_region())["still"])
+
+    def test_report(self):
+        text = " ".join(pp.render_report(pp.derive(pp.Scenario())).split())
+        for phrase in ["waiting for the last systems",
+                       "The two that record by system are the same here",
+                       "only the facts of its neighbors can matter to it",
+                       "Spread evenly, one probe to a region of its own",
+                       "into the survey",
+                       "a simulation that follows single probes "
+                       "(plan0_sim.py)",
+                       "The stars stand still while this survey lasts",
+                       "it is taken to foresee 95% of the others' choices",
+                       "what one probe needs for its share"]:
+            self.assertIn(phrase, text)
+        self.assertNotIn("the estimate sits at its ceiling", text)
+        self.assertEqual(banned_tokens(text), [])
+        explain = pp.render_explain(pp.derive(pp.Scenario()))
+        self.assertIn("where the stars stand still (weight 0.98", explain)
+        self.assertIn("the last systems = survey - work - duplicated work",
+                      explain)
+        self.assertEqual(banned_tokens(explain), [])
+        # Fewer than ten systems per probe: outside what was simulated.
+        crowd = " ".join(pp.render_report(pp.derive(pp.Scenario(
+            probes=3 * 10 ** 10))).split())
+        self.assertIn("the simulation covers 10 to 300", crowd)
 
 
 class TestLeftOut(unittest.TestCase):
@@ -3114,8 +3397,11 @@ class TestInputValidation(unittest.TestCase):
                      dict(detour_kpc=0), dict(dwell_years=0)]:
             r = pp.derive(ten_thousand(**fine))
             self.assertGreater(r["total_years"], 0, fine)
-        self.assertEqual(
-            pp.derive(ten_thousand(dup_gain=0))["duplication_fraction"], 0)
+        # (not exactly zero: the survey for stars that stand still keeps
+        # a weight of 3e-13 in this fleet)
+        self.assertAlmostEqual(
+            pp.derive(ten_thousand(dup_gain=0))["duplication_fraction"], 0.0,
+            places=9)
 
     def test_values_that_are_not_finite_numbers_rejected(self):
         for flag in ["--speed", "--dwell", "--systems", "--dup-gain"]:
