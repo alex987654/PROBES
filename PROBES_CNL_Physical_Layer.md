@@ -62,15 +62,23 @@ An order-of-magnitude budget for neighbor-to-neighbor contact:
 - received power ≈ 4×10⁻²⁰ W ≈ 0.2 photons per second
 
 With photon-starved pulse-position modulation, that supports
-**of order 0.1–1 bit per second, best case, between fixed and
-mutually known endpoints** — before pointing losses.
+**of order 0.1–1 bit per second, best case, between mutually
+known endpoints** — before pointing losses.
 
 Two conclusions fall straight out:
 
-1. **Beams point at catalogued fixed nodes, not at moving
-   probes.** A probe cannot maintain ephemerides for 9,999
-   moving peers across centuries; it can point at a catalogued
-   cache node forever.
+1. **Beams point at catalogued nodes, and at a probe whose
+   stops the sender can work out.** A probe cannot maintain
+   ephemerides for 10⁹ moving peers; it can hold the catalogued
+   position and velocity of a cache node, and it can derive
+   from `PROC-1` the star at which a neighbor will be. Nodes
+   are not at rest: they share the motion of their host stars,
+   tens of kilometers per second relative to one another.
+   Across the ≈ 26-year light time of one spacing, a transverse
+   30 km/s amounts to ≈ 160 astronomical units, a thousand beam
+   radii, so pointing ahead needs relative velocities to
+   ≈ 30 m/s — a `CAT-CCH` entry, refined at every consolidation
+   cycle.
 2. **The wire form is not an optimization; it is the channel's
    admission ticket.** At bits per second, a 500-byte PROBES-W
    survey message costs about an hour of link time; the same
@@ -105,7 +113,7 @@ message media and, optionally, a low-power custodial device.
 | Tier | What | Where | Power |
 |---|---|---|---|
 | **L1 — custodial archive nodes** | active nodes: consolidation, manifest broadcasts, scrubbing, inter-node beaming | wide orbits of quiescent, long-lived low-mass stars in inter-arm disc regions | stellar flux (photovoltaic/thermal) |
-| **L2 — passive caches** | unattended media deposit sites on survey routes | anywhere dynamically stable, including deep interstellar space | none (double replication, Transport §5) |
+| **L2 — passive caches** | unattended media deposit sites on survey routes | in the surveyed system itself where it meets criterion 1, so that a deposit costs no side trip; otherwise anywhere dynamically stable, including deep interstellar space | none (double replication, Transport §5) |
 | **L3 — cold vaults** | write-rarely archive replicas for deep time | long-period halo orbits, far from disc traffic and hazards | none |
 
 The tier is an attribute in `CAT-CCH`, not a grammar
