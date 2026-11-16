@@ -312,23 +312,31 @@ mid-disc radius). Nothing in any message names that place — but
 Countermeasures, in force from the first transmitted bit:
 
 1. **Dispersal doctrine (`PROC-DSP`).** Before survey
-   operations begin, every probe transits to a seed region
-   assigned by a deterministic, public function of its random
-   probe identifier and catalogue constants — uniform over the
-   tessellation, blind to entry proximity. Survey then grows
-   from 10⁴ scattered seeds, and the activity pattern is
-   statistically homogeneous from the first message: there is
-   no front to fit. **DSP-1:** no messages during dispersal.
-   **DSP-2:** no message-recorded observations during dispersal
-   (transit navigation is journal-local); recorded survey
-   begins at the seed. **DSP-3:** message emission fleet-wide
-   begins at a catalogue activation epoch `T_act` ≥ the
-   dispersal envelope. The cost is real — of order 3×10⁵ years
-   of unrecorded transit at nominal speed for the mean ≈ 10 kpc
-   dispersal leg — and it is the price of an origin-free sky.
-   The tempting shortcut (each probe takes the *nearest*
-   unclaimed seed) is rejected: it recreates the cluster around
-   the entry that dispersal exists to erase.
+   operations begin, every probe transits to its seed region:
+   the one region that `CAT-REG` pairs with its probe
+   identifier. The tessellation has as many regions as the
+   fleet has probes, each holding equal survey work, and the
+   pairing is drawn at random — one probe per region, blind to
+   entry proximity. Survey then grows from 10⁹ seeds, and the
+   activity pattern is statistically homogeneous from the first
+   message: there is no front to fit. **DSP-1:** no messages
+   during dispersal. **DSP-2:** no message-recorded
+   observations before `T_act` (transit navigation is
+   journal-local); recorded survey begins at the seed, at
+   `T_act`, for every probe alike. **DSP-3:** message emission
+   fleet-wide begins at a catalogue activation epoch `T_act` ≥
+   the dispersal envelope. The envelope is the disc diameter
+   divided by the cruise speed, the longest leg possible from
+   any entry point. No smaller value is origin-blind: an
+   envelope sized to the fleet's own longest leg would encode
+   the entry radius, and a probe that began recording on
+   arrival would date its first observation by its distance
+   from the entry. The cost is real — every probe waits
+   ≈ 1×10⁶ years at nominal speed (≈ 30 kpc at 0.1 c) before
+   its first recorded observation — and it is the price of an
+   origin-free sky. The tempting shortcut (each probe takes the
+   *nearest* unclaimed seed) is rejected: it recreates the
+   cluster around the entry that dispersal exists to erase.
 2. **ORG-3** (§3.3): no establishment epochs in structural
    catalogues.
 3. **CONS-1:** coverage aggregates record completion *status*,
