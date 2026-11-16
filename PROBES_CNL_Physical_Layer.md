@@ -21,7 +21,7 @@ companion `PROBES_CNL_Transport_Layer.md`.*
 | Probes | 10⁹ | ≈ 100 star systems and ≈ 500 cubic parsecs per probe; the fleet fills the disc, ≈ 90 probes deep |
 | Mean neighbor spacing s | ≈ 8 parsecs (pc) ≈ 2.4×10¹⁷ m | light travel time per spacing T_e ≈ 26 years |
 | Probe cruise speed (studied concepts, 0.05–0.2 c) | nominal 0.1 c | probe transit per spacing T_t ≈ 260 years |
-| Survey after activation | ≈ 9×10³ years | a star moves < 1 pc meanwhile: the field stands still |
+| Survey after activation | ≈ 8×10³ years | a star moves < 1 pc meanwhile: the field stands still |
 | Custodial nodes | ≈ 10⁶, one to ≈ 10³ probes | node spacing ≈ 10 s ≈ 80 pc ≈ 2.4×10¹⁸ m; light travel time ≈ 260 years |
 | Consolidation cadence T_c | ~10⁴ years (≈ the survey itself) | archives record the survey; they do not steer it |
 | Fleet-crossing light time | ~10⁵ years | no fact reaches the whole fleet while the survey lasts |
