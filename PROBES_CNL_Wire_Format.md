@@ -73,7 +73,7 @@ Fixed key order, all keys mandatory:
 Example:
 
 ```
-@|SC=1.0|MG=9B2E44C7A1D0F358|SN=P-7F3A9C21|PL=0|EP=B3:8214559102334,B5:130995824|PO=-8.21e18,2.44e17,6.1e16|RG=4471|CT=BCN:14,PRC:9,REG:3,TGT:203|DG=9b2e…f3
+@|SC=1.0|MG=94713A3BD66B7E2F|SN=7F3A9C21|PL=0|EP=B3:15050409362501,B5:26327013399951|PO=1.46e20,-2.87e20,-3.9e18|RG=4471|CT=BCN:14,PRC:9,REG:3,TGT:203|DG=9471…b2
 ```
 
 ## 4. Declaration Records
@@ -84,7 +84,7 @@ order:
 | Namespace code | Envelope list | Entry form |
 |---|---|---|
 | `BCN` | `beacons:` | beacon number |
-| `EPO` | `epochs:` | `id=PTS expression`, e.g. `1=B3:8214559102712` |
+| `EPO` | `epochs:` | `id=PTS expression`, e.g. `1=B3:15050361341658,B5:26326929399222` |
 | `TGT` | `targets:` | target number |
 | `FTR` | `features:` under `targets:` entries | full suffixed id, e.g. `TGT-0451-L1` |
 | `INS` | `instruments:` | `ID=type-noun-code` |
@@ -284,8 +284,8 @@ assemble records, compute digest.
 ## 9. Size Behavior
 
 Illustrative, using the worked example in the Examples
-document: a 6-clause survey message runs ≈ 1,480 bytes in
-PROBES-H and ≈ 500 bytes in PROBES-W (≈ 66% reduction) before
+document: a 9-clause survey message runs ≈ 2,220 bytes in
+PROBES-H and ≈ 780 bytes in PROBES-W (≈ 65% reduction) before
 any transport-layer packing. Savings come from word codes
 (≈ 45% on free-form interiors), templates (≈ 70% on templated
 clauses), header/declaration key compression, and regenerated

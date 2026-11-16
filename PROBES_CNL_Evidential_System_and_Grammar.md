@@ -213,8 +213,8 @@ schema: probes-cnl-v1.0
 message: MSG-9B2E44C7A1D0F358
 sender: P-7F3A9C21
 plan: PLAN-0
-epoch: "BCN-3: 8214559102334 + BCN-5: 130995824"
-position: "GSF -8.21e18 +2.44e17 +6.10e16 meter"
+epoch: "BCN-3: 15050409362501 + BCN-5: 26327013399951"
+position: "GSF 1.46e20 -2.87e20 -3.9e18 meter"
 region: REG-4471
 catalogues:               # version pinning (FRONT-5)
   CAT-BCN: 14
@@ -241,7 +241,7 @@ journals:
 caches: []                # CCH-* cache nodes (R-20)
 epochs:                   # EP-* declared epochs (R-21)
   - id: EP-1
-    value: "BCN-3: 8214559102712"
+    value: "BCN-3: 15050361341658 + BCN-5: 26326929399222"
 references: []            # ARC-* archive records, for E-RPT
 messages_cited:           # for E-RLY
   - id: MSG-4C11D02A9E44B7F0

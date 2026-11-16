@@ -9,11 +9,11 @@
 ```yaml
 ---
 schema: probes-cnl-v1.0
-message: MSG-9B2E44C7A1D0F358
+message: MSG-94713A3BD66B7E2F
 sender: P-7F3A9C21
 plan: PLAN-0
-epoch: "BCN-3: 8214559102334 + BCN-5: 130995824"
-position: "GSF -8.21e18 2.44e17 6.1e16 meter"
+epoch: "BCN-3: 15050409362501 + BCN-5: 26327013399951"
+position: "GSF 1.46e20 -2.87e20 -3.9e18 meter"
 region: REG-4471
 catalogues:
   CAT-BCN: 14
@@ -62,7 +62,7 @@ hypothesis_space:
   - id: H-2
     statement: "the oxygen fraction follows from biological processes"
     discriminates_via: [MSR-5.1]
-digest: 9b2e44c7a1d0f358aa10b6c94d21e7f3c0884d1a52ef90b7361cd42a8fe15690
+digest: 94713a3bd66b7e2fd518ced24a7b24edf9e402975fcf2be3df4becb1025a41b2
 ---
 ```
 
@@ -122,7 +122,7 @@ v1.0.
 
 ```
 %PW1
-@|SC=1.0|MG=9B2E44C7A1D0F358|SN=P-7F3A9C21|PL=0|EP=B3:8214559102334,B5:130995824|PO=-8.21e18,2.44e17,6.1e16|RG=4471|CT=BCN:14,PRC:9,REG:3,TGT:203|DG=9b2e44c7a1d0f358aa10b6c94d21e7f3c0884d1a52ef90b7361cd42a8fe15690
+@|SC=1.0|MG=94713A3BD66B7E2F|SN=7F3A9C21|PL=0|EP=B3:15050409362501,B5:26327013399951|PO=1.46e20,-2.87e20,-3.9e18|RG=4471|CT=BCN:14,PRC:9,REG:3,TGT:203|DG=94713a3bd66b7e2fd518ced24a7b24edf9e402975fcf2be3df4becb1025a41b2
 D|BCN|0|1|3|5
 D|TGT|1088|1090
 D|INS|CAM-3=N0K|LND-1=N3D|MAG-1=N3H|RX-1=N5A|SPEC-2=N5T
@@ -146,8 +146,8 @@ C|H|c=H-1|f=MSR-5.1|x=H-2|T9:N4M;TGT-1088
 ```
 
 Header, declarations, section marks, template instances,
-regenerated punctuation: the H-form above (~1,480 bytes)
-round-trips from ~500 bytes of wire.
+regenerated punctuation: the H-form above (~2,220 bytes)
+round-trips from ~780 bytes of wire.
 
 ---
 
